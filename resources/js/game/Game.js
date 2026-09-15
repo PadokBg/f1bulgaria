@@ -51,6 +51,9 @@ import {
 } from './sim.js';
 import { createEngineSound } from './sound.js';
 import { isMobileDevice } from './device.js';
+import { shouldCaptureGameKey } from './keyboard.js';
+import { advanceQualityGovernor, GOVERNOR } from './qualityGovernor.js';
+import { createLightweightAa } from './lightweightAa.js';
 import { prepareTrack, projectOnTrack } from './track.js';
 import { createDrivetrain, shiftDown, shiftUp, updateDrivetrain } from './drivetrain.js';
 import { createTvDirector, recordClip as captureReplayClip } from './tvDirector.js';
@@ -138,28 +141,6 @@ const COMPOSER_READY = Promise.resolve();
 /** Сенчестата кутия около колата (полуразмер, m) и разстоянието до слънцето. */
 const SHADOW_HALF_SIZE = 30;
 const SUN_DISTANCE = 300;
-
-/**
- * Governor за целевите 60 fps. На 120/144 Hz не харчим термалния бюджет, за да
- * гоним честотата на панела; на 60 Hz реагираме още около 49 fps, вместо да
- * чакаме спад под 40. Резолюцията пада първа, а само Auto може след устойчиво
- * натоварване на минималния scale да свали и структурни ефекти.
- */
-const GOVERNOR = {
-    downRatio: 1.22,
-    upRatio: 1.04,
-    outlierRatio: 4,
-    outlierLimit: 3,
-    outlierWindow: 1.0,
-    minTargetMs: 1000 / 60,
-    minVsyncMs: 4,
-    maxVsyncMs: 1000 / 60,
-    step: 0.15,
-    floor: 0.55,
-    downCooldown: 1.0,
-    upCooldown: 3.0,
-    featureDownDelay: 3.0,
-};
 
 /** Звукът на решетката преди старта — константен обект, нула алокации/кадър. */
 const LAUNCH_SOUND_EXTRAS = Object.freeze({ kerb: false, gravel: false, speed: 0 });
@@ -1069,6 +1050,7 @@ export class Game {
         this.camera.updateProjectionMatrix();
 
         this.composer?.setSize(width, height);
+        this.lightweightAa?.setSize(width, height, this.renderer.getPixelRatio());
         if (this.gradePass) {
             this.gradePass.uniforms.uAspect.value = width / height;
         }
@@ -1698,16 +1680,21 @@ export class Game {
         this.composerReady = COMPOSER_READY;
         this.gtaoPass = null;
 
-        // Mobile и Low/Auto-safe са БЕЗ composer. Директният renderer прилага
-        // tone mapping + sRGB сам; когато сесията е стартирала в Low/mobile,
-        // контекстът има хардуерен MSAA. Така Low не държи два RGBA16F target-а,
-        // 4× MSAA и depth само за антиалайзинг на слаб iGPU.
+        // Native MSAA keeps the mobile/initial-Low path direct. A desktop
+        // context created for the full composer cannot gain native MSAA later;
+        // its lightweight fallback preserves edges when Auto sheds effects.
         if (this.lowPower || this.quality.postFx === false) {
             this.composer = null;
             this.composerTarget = null;
             this.bloomPass = null;
             this.gradePass = null;
             this.particles?.setDepth(null);
+            if (!this.lowPower
+                && this.renderer.getContext().getContextAttributes()?.antialias === false
+                && this.renderer.extensions.has('EXT_color_buffer_float')) {
+                this.lightweightAa = createLightweightAa(this.renderer);
+                this.lightweightAa.setSize(this.canvas.clientWidth || 1, this.canvas.clientHeight || 1, this.renderer.getPixelRatio());
+            }
             return;
         }
 
@@ -1807,6 +1794,8 @@ export class Game {
         this.composerGeneration += 1;
         this.composerReady = COMPOSER_READY;
         this.gtaoPass = null;
+        this.lightweightAa?.dispose();
+        this.lightweightAa = null;
         if (!this.composer) {
             return;
         }
@@ -1831,149 +1820,29 @@ export class Game {
         );
     }
 
-    /**
-     * Governor към 60 fps: първо мести само 3D резолюцията. Ако Auto остане
-     * претоварен три секунди и на минималния scale, #governAdaptiveFeatures
-     * сваля CSM/частици, а при втори устойчив период — post stack-а. HUD-ът е
-     * DOM и остава кристален независимо от 3D резолюцията.
-     *
-     * @param {number} rawDt Секунди, преди MAX_FRAME_TIME клампата
-     */
+    /** Adapt presentation to sustained load, preserving clarity before expensive effects. */
     #governResolution(rawDt) {
-        // Връщане от скрит таб дава rawDt от секунди/минути — това е пауза,
-        // не бавен кадър, и се игнорира изцяло: дори клампната ѝ стойност би
-        // вдигнала EMA-то над прага и би струвала стъпка надолу на здраво
-        // устройство. Реални бавни кадри (thermal) са 30-60 ms, не >250 ms.
-        if (rawDt > 0.25) {
-            return;
-        }
-        const ms = rawDt * 1000;
-        const g = GOVERNOR;
-
-        // Период на дисплея: пълзящ минимум с бавно отпускане (2%/кадър), за
-        // да проследи и преместен на 60 Hz монитор прозорец. Пробата е max от
-        // два съседни кадъра — единичен „къс" интервал (дублиран rAF
-        // timestamp) не може сам да свали периода; истински по-бърз дисплей
-        // дава поредица от къси кадри.
-        const sample = Math.max(ms, this.prevFrameMs);
-        this.prevFrameMs = ms;
-        this.vsyncMs = clamp(Math.min(this.vsyncMs * 1.02, sample), g.minVsyncMs, g.maxVsyncMs);
-        const targetMs = Math.max(this.vsyncMs, g.minTargetMs);
-
-        this.scaleCooldown -= rawDt;
-        if (this.outlierTimer > 0) {
-            this.outlierTimer -= rawDt;
-            if (this.outlierTimer <= 0) {
-                this.outlierCount = 0;
-            }
-        }
-
-        // Единичен hitch (GC, компилация, alt-tab) не влиза в средната — но
-        // три за секунда са устройство в затруднение: стъпка надолу.
-        if (ms > targetMs * g.outlierRatio) {
-            if (this.outlierTimer <= 0) {
-                this.outlierTimer = g.outlierWindow;
-            }
-            this.outlierCount++;
-            if (this.outlierCount >= g.outlierLimit) {
-                this.outlierCount = 0;
-                this.outlierTimer = 0;
-                if (this.scaleCooldown <= 0) {
-                    this.#stepRenderScale(-1);
-                }
-            }
-            return;
-        }
-
-        // EMA-то тръгва от първия реален кадър, не от константа: на 144 Hz
-        // сийд 16 ms би стоял над прага 12.5 ms цели 30 кадъра — фалшива стъпка.
-        this.frameAvgMs = this.frameAvgMs === 0 ? ms : this.frameAvgMs + (ms - this.frameAvgMs) * 0.05;
-        this.#governAdaptiveFeatures(rawDt, targetMs);
-
-        if (this.scaleCooldown > 0) {
-            return;
-        }
-        if (this.frameAvgMs > targetMs * g.downRatio) {
-            this.#stepRenderScale(-1);
-        } else if (this.frameAvgMs < targetMs * g.upRatio) {
-            this.#stepRenderScale(1);
-        }
-    }
-
-    /**
-     * Структурният fallback е само за Auto и само след като резолюцията вече
-     * няма накъде да пада. Не качваме обратно насред сесия: това би компилирало
-     * шейдъри и би сменяло вида в движение. Следващото влизане започва от full.
-     *
-     * @param {number} dt
-     * @param {number} targetMs
-     */
-    #governAdaptiveFeatures(dt, targetMs) {
-        const g = GOVERNOR;
-        if (
-            this.lowPower
-            || this.quality.adaptive !== true
-            || this.autoQualityStage >= 2
-        ) {
-            this.autoQualitySlowSeconds = 0;
-            return;
-        }
-
-        const atFloor = this.renderScale <= g.floor + 1e-4;
-        const overloaded = this.frameAvgMs > targetMs * g.downRatio;
-        if (!atFloor || !overloaded) {
-            // Кратък добър участък не изтрива веднага натрупания thermal сигнал.
-            this.autoQualitySlowSeconds = Math.max(0, this.autoQualitySlowSeconds - dt * 0.5);
-            return;
-        }
-
-        this.autoQualitySlowSeconds += dt;
-        if (this.autoQualitySlowSeconds < g.featureDownDelay) {
-            return;
-        }
-
-        this.autoQualitySlowSeconds = 0;
-        this.autoQualityStage += 1;
-        if (this.autoQualityStage === 1) {
-            this.setQuality({
+        const change = advanceQualityGovernor(this, rawDt, {
+            adaptive: this.quality.adaptive,
+            lowPower: this.lowPower,
+        });
+        if (change.stageChanged) {
+            this.setQuality(this.autoQualityStage === 1 ? {
                 motionBlur: false,
                 csmQuality: 'medium',
                 particles: 0.75,
+            } : {
+                postFx: false,
+                motionBlur: false,
+                shadows: 'low',
+                csmQuality: 'low',
+                ao: false,
+                particles: 0.5,
             });
-            return;
         }
-
-        this.setQuality({
-            postFx: false,
-            motionBlur: false,
-            shadows: 'low',
-            csmQuality: 'low',
-            ao: false,
-            particles: 0.5,
-        });
-    }
-
-    /**
-     * Една стъпка на мащаба (−1 надолу / +1 нагоре) с нейния cooldown.
-     *
-     * @param {number} direction
-     */
-    #stepRenderScale(direction) {
-        const g = GOVERNOR;
-        if (direction < 0) {
-            if (this.renderScale <= g.floor) {
-                return;
-            }
-            this.renderScale = Math.max(g.floor, this.renderScale - g.step);
-            this.scaleCooldown = g.downCooldown;
-        } else {
-            if (this.renderScale >= 1) {
-                return;
-            }
-            this.renderScale = Math.min(1, this.renderScale + g.step);
-            this.scaleCooldown = g.upCooldown;
+        if (change.scaleChanged) {
+            this.#applyRenderScale();
         }
-        this.#applyRenderScale();
     }
 
     #applyRenderScale() {
@@ -2004,6 +1873,8 @@ export class Game {
             if (this.composer.readBuffer !== this.composerTarget) {
                 this.composer.swapBuffers();
             }
+        } else if (this.lightweightAa) {
+            this.lightweightAa.render(this.scene, this.camera);
         } else {
             this.renderer.render(this.scene, this.camera);
         }
@@ -2180,6 +2051,10 @@ export class Game {
 
     #bindEvents() {
         this.onKeyDown = (event) => {
+            if (!shouldCaptureGameKey(event, this.started)) {
+                this.keys.delete(event.code);
+                return;
+            }
             if (INTERESTING_KEYS.has(event.code)) {
                 event.preventDefault();
                 this.keys.add(event.code);

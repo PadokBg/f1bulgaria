@@ -2547,11 +2547,11 @@ const recenterTilt = () => {
                             <!-- Делта-бар срещу духа: центрирана нула, ±2 s, зелено = пред него -->
                             <div v-if="liveDelta !== null" class="mt-1.5">
                                 <div class="flex items-baseline justify-between gap-3">
-                                    <span class="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+                                    <span class="min-w-0 truncate text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
                                         vs {{ ghostTag }}
                                     </span>
                                     <span
-                                        class="font-display text-lg font-black tabular-nums"
+                                        class="shrink-0 font-display text-lg font-black tabular-nums"
                                         :class="liveDelta <= 0 ? 'text-emerald-400' : 'text-red-400'"
                                     >
                                         {{ formatGap(liveDelta) }}
@@ -2603,9 +2603,9 @@ const recenterTilt = () => {
 
                             <div
                                 v-if="!telemetry.started && telemetry.raceTotalLaps === 0 && launchLights === null"
-                                class="mt-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-500"
+                                class="mt-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-400"
                             >
-                                Мини старта за хронометрирана обиколка
+                                {{ isMobile ? 'Мини стартовата линия' : 'Мини старта за хронометрирана обиколка' }}
                             </div>
                             <div
                                 v-else-if="!telemetry.lapValid && telemetry.fieldSize === 1"
@@ -2636,7 +2636,7 @@ const recenterTilt = () => {
 
                         <!-- Живи сплитове: лилаво/зелено/жълто при пресичане; преди
                              това — времето от предишната обиколка, затъмнено. -->
-                        <div class="mt-1.5 flex gap-1.5 font-display text-[11px] font-bold tabular-nums">
+                        <div class="mt-1.5 flex flex-wrap gap-1.5 font-display text-[11px] font-bold tabular-nums">
                             <span
                                 v-for="(cell, i) in sectorCells"
                                 :key="`${i}:${cell.live ? 'live' : 'last'}:${cell.value ?? '-'}`"
@@ -3249,9 +3249,6 @@ const recenterTilt = () => {
                                     <span><kbd class="rounded bg-zinc-800 px-1.5 py-0.5">C</kbd> камера</span>
                                     <span><kbd class="rounded bg-zinc-800 px-1.5 py-0.5">M</kbd> звук</span>
                                 </div>
-                                <p class="mt-2 text-[11px] text-zinc-500">
-                                    {{ rivals === 'race' ? 'Изчакай червените светлини да изгаснат и потегли.' : 'Мини стартовата линия, за да пуснеш хронометъра.' }}
-                                </p>
                             </div>
 
                                 </div>
@@ -3259,6 +3256,12 @@ const recenterTilt = () => {
                                 <!-- Отделен footer: primary CTA остава видим, докато
                                      настройките над него се скролват. -->
                                 <div class="shrink-0 border-t border-white/10 bg-zinc-950/75 p-3 backdrop-blur sm:p-4">
+                                    <p id="prestart-goal" class="mb-3 text-xs leading-relaxed text-zinc-200">
+                                        <span class="font-bold text-white">Цел:</span>
+                                        {{ rivals === 'race'
+                                            ? `Завърши ${raceTotalLaps} обиколки. Потегли след изгасването на светлините.`
+                                            : 'Мини стартовата линия, после завърши една пълна обиколка.' }}
+                                    </p>
                                     <!-- Истински loading прогрес: болидът/средата по байтове -->
                                     <div v-if="loading" class="mb-3">
                                         <div class="h-1.5 overflow-hidden rounded-full bg-zinc-800">
@@ -3284,6 +3287,7 @@ const recenterTilt = () => {
                                             ref="preStartCta"
                                             type="button"
                                             class="min-w-0 flex-1 rounded-xl bg-[#e10600] px-4 py-3 text-sm font-black uppercase tracking-wider text-white shadow-lg shadow-red-950/40 transition hover:bg-[#ff0800] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white disabled:cursor-wait disabled:opacity-60"
+                                            aria-describedby="prestart-goal"
                                             :disabled="loading"
                                             @click="beginLap"
                                         >
@@ -3996,6 +4000,18 @@ const recenterTilt = () => {
 
 .game-stage-mobile .hud-speed {
     right: max(0.75rem, env(safe-area-inset-right, 0px)) !important;
+}
+
+@media (orientation: landscape) {
+    .game-stage-mobile .hud-timing {
+        /* Оставя 12 px пред центрираната миникарта (72 px), включително
+           когато прорезът на телефона измества левия край на HUD-а. */
+        max-width: min(20rem, calc(50vw - 3rem - max(0.75rem, env(safe-area-inset-left, 0px))));
+    }
+
+    .game-stage-mobile .timing-panel {
+        overflow-wrap: anywhere;
+    }
 }
 
 .mobile-controls {
