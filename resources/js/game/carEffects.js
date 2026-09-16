@@ -659,8 +659,8 @@ function buildBlobShadow(axles, opacity) {
 /**
  * Кръпка „прах" върху боята: маска по височина × шум по долната част на
  * тялото, цветът и грапавостта се смесват към прахта, лакът угасва там.
- * Влиза СЛЕД roughnessmap_fragment (след ливреята на съперниците, която
- * пише в color_fragment), за да остане прахът отгоре.
+ * Влиза в metalnessmap_fragment, след завършения roughness pass и ливреята
+ * в color_fragment, за да остане прахът над финиша на боята и карбона.
  *
  * @param {import('./car.js').CarRig} rig
  * @returns {{uDirt: {value: number}, uDirtColor: {value: THREE.Color}}|null}
@@ -688,8 +688,8 @@ function installDirtPatch(rig) {
                 float carDirt = 0.0;`,
             replace: [
                 [
-                    'roughnessmap_fragment',
-                    /* glsl */ `#include <roughnessmap_fragment>
+                    'metalnessmap_fragment',
+                    /* glsl */ `#include <metalnessmap_fragment>
                     {
                         float h = clamp(1.0 - vDirtPos.y / 0.55, 0.0, 1.0);
                         float n = texture2D(tDirt, vDirtPos.xz * 1.5).r;

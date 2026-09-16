@@ -590,7 +590,7 @@ function buildPatch(kind, f, target = {}) {
             // Гаусов профил σ ≈ 0.9 m около линията.
             'float sRub = exp(-sD * sD * 0.625) * (0.85 + 0.3 * sStreakK) * sHas;',
             'diffuseColor.rgb *= 1.0 - 0.32 * sRub;',
-            // Спирачни зони: по-тъмни и мазни ивици точно по гумата.
+            // Спирачни зони: по-тъмни ивици точно по гумата.
             'float sBrake = sProf.b * sRub;',
             'diffuseColor.rgb *= 1.0 - 0.2 * sBrake * (0.6 + 0.4 * sWearK);'
         );
@@ -661,11 +661,16 @@ function buildPatch(kind, f, target = {}) {
     const rough = ['float roughnessFactor = roughness;'];
     rough.push('#ifdef USE_ROUGHNESSMAP', `    vec4 texelRoughness = ${sample('roughnessMap', roughUv)};`, '    roughnessFactor *= texelRoughness.g;', '#endif');
     if (f.rubber) {
-        // Гумираната линия е по-гланцова; в спирачните зони — мазна.
-        rough.push('roughnessFactor *= 1.0 - 0.35 * sRub;', 'roughnessFactor *= 1.0 - 0.5 * sBrake;');
+        // Гумата полира леко агрегата, без сухият асфалт да изглежда мокър.
+        rough.push('roughnessFactor *= 1.0 - 0.10 * sRub;', 'roughnessFactor *= 1.0 - 0.12 * sBrake;');
     }
     if (f.patches) {
-        rough.push('roughnessFactor -= 0.25 * sPatch;');
+        rough.push('roughnessFactor -= 0.06 * sPatch;');
+    }
+    if (kind === 'asphalt') {
+        // Прагът е само за сухия агрегат. Боята, нощното осветление и локвите
+        // запазват собствения си блясък в следващите слоеве.
+        rough.push('roughnessFactor = max(roughnessFactor, 0.68);');
     }
     if (f.lines) {
         rough.push('roughnessFactor = mix(roughnessFactor, 0.45, sPaint);');

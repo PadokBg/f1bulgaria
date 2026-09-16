@@ -16,6 +16,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { createAtmosphere } from './atmosphere.js';
+import { createAsphaltTextures } from './asphaltTexture.js';
 import { driveAutopilot } from './autopilot.js';
 import {
     attachCarModel,
@@ -1283,9 +1284,8 @@ export class Game {
     // ── Вътрешни ─────────────────────────────────────────────────────────
 
     /**
-     * Зарежда tiling PBR текстурите на пистата (асфалт). Обектите се връщат
-     * веднага (пълнят се при decode), а промисът се резолвва при зареждане —
-     * добавя се към this.ready, за да са готови ПРЕДИ първия кадър (без pop).
+     * Асфалтът се пече веднага; тревата и чакълът зареждат PBR карти.
+     * Промисът влиза в this.ready, за да са готови преди първия кадър.
      *
      * @returns {Promise<void>}
      */
@@ -1315,6 +1315,17 @@ export class Game {
         // на малък екран под движеща се камера, а тройният texture fetch на
         // фрагмент яде точно тесния мобилен bandwidth.
         const detail = !this.lowPower;
+        const asphalt = this.surfaceMaterials?.asphalt;
+        if (asphalt) {
+            const textures = createAsphaltTextures({ detail, anisotropy: maxAniso, repeat: surfaceRepeat('asphalt') });
+            for (const slot of ['map', 'normalMap', 'roughnessMap']) {
+                asphalt[slot]?.dispose?.();
+                asphalt[slot] = textures[slot];
+            }
+            asphalt.color.set(0xffffff);
+            asphalt.vertexColors = true;
+            asphalt.needsUpdate = true;
+        }
         const applyTo = (name, dir, repeat) => Promise.all([
             load(`/game-textures/${dir}/diff.jpg`, true, repeat),
             detail ? load(`/game-textures/${dir}/nor.jpg`, false, repeat) : Promise.resolve(null),
@@ -1345,7 +1356,6 @@ export class Game {
         // Бавна мрежа да не държи loading екрана безкрайно.
         return Promise.race([
             Promise.all([
-                applyTo('asphalt', 'asphalt', [surfaceRepeat('asphalt'), surfaceRepeat('asphalt')]),
                 applyTo('grass', 'grass', [surfaceRepeat('grass'), surfaceRepeat('grass')]),
                 applyTo('gravel', 'gravel', [surfaceRepeat('gravel'), surfaceRepeat('gravel')]),
             ]),

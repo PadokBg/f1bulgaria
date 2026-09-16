@@ -479,16 +479,17 @@ export function deriveCarMasks(baseColor) {
         const saturation = chroma === 0 ? 0 : chroma / (1 - Math.abs(2 * lightness - 1));
         const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
 
-        const paint = smoothstep(0.35, 0.55, saturation);
+        // Тъмносиният карбон също е наситен: яркостта го отделя от боята.
+        const paint = smoothstep(0.35, 0.55, saturation) * smoothstep(0.18, 0.36, max);
         const white = (1 - paint) * smoothstep(0.6, 0.8, luma);
         const gloss = Math.max(paint, white);
 
-        dataA[i * 4] = Math.round(lerp(0.25, 1.0, gloss) * 255);
-        dataA[i * 4 + 1] = Math.round(Math.max(0, lerp(0.55, 0.3, gloss) - 0.05 * white) * 255);
+        dataA[i * 4] = Math.round(lerp(0.08, 0.72, gloss) * 255);
+        dataA[i * 4 + 1] = Math.round(lerp(0.72, 0.38, gloss) * 255);
         dataA[i * 4 + 2] = Math.round(paint * 255);
         dataA[i * 4 + 3] = 255;
         dataB[i * 2] = 0;
-        dataB[i * 2 + 1] = Math.round(lerp(0.35, 0.08, gloss) * 255);
+        dataB[i * 2 + 1] = Math.round(lerp(0.42, 0.2, gloss) * 255);
 
         paintLumaSum += luma * paint;
         paintWeight += paint;
@@ -554,9 +555,8 @@ function averageRimColor(atlas) {
  * clearcoat. Явен envMap (иначе three r180 игнорира envMapIntensity на
  * материала и колата отразява със scene.environmentIntensity).
  *
- * metalness 0.25, не 0.6: автомобилната боя е диелектрик под лак — при 0.6
- * червеното потъмнява и се оцветява от небето (изглежда като анодизиран
- * метал, не като лак). Отражението идва от clearcoat лоба.
+ * Слабо метална база и мек лак: червеното остава наситено, а отражението
+ * подчертава формата, без да превръща карбона и крилата в огледала.
  *
  * @param {CarTemplate} template
  * @param {{environment?: THREE.Texture|null, environmentRotation?: THREE.Euler|null, maxAniso?: number, lowPower?: boolean}} options
@@ -573,7 +573,7 @@ export function makePaintMaterial(template, options = {}) {
     if (material.map && options.maxAniso) {
         material.map.anisotropy = options.maxAniso;
     }
-    material.metalness = 0.25;
+    material.metalness = 0.08;
     material.ior = 1.5;
     material.specularIntensity = 1;
     material.envMap = options.environment ?? null;
@@ -590,13 +590,44 @@ export function makePaintMaterial(template, options = {}) {
         material.clearcoatMap = template.masks.maskA;
         material.clearcoatRoughness = 1; // × maskB.g
         material.clearcoatRoughnessMap = template.masks.maskB;
-        material.envMapIntensity = 1.1;
+        material.envMapIntensity = 0.85;
     } else {
-        // Телефон/без маски: константи — карбонът също лъщи леко, приемливо.
+        // Телефон/без маски: класификация от вече прочетения базов цвят,
+        // преди ливреята/замърсяването. Без нови текстури или texture fetch.
         material.roughness = 0.38;
-        material.clearcoat = 0.8;
-        material.clearcoatRoughness = 0.12;
-        material.envMapIntensity = 0.9;
+        material.clearcoat = 0.72;
+        material.clearcoatRoughness = 0.2;
+        material.envMapIntensity = 0.85;
+        applyPatch(material, {
+            name: 'paint-finish',
+            replace: [
+                [
+                    'map_fragment',
+                    /* glsl */ `#include <map_fragment>
+                    float carMax = max(max(diffuseColor.r, diffuseColor.g), diffuseColor.b);
+                    float carMin = min(min(diffuseColor.r, diffuseColor.g), diffuseColor.b);
+                    float carChroma = (carMax - carMin) / max(carMax, 0.001);
+                    // Цветът тук е линеен: тъмносиният карбон е под 0.035.
+                    float carPaintGloss = max(
+                        smoothstep(0.35, 0.65, carChroma) * smoothstep(0.035, 0.11, carMax),
+                        smoothstep(0.3, 0.65, carMin)
+                    );`,
+                ],
+                [
+                    'roughnessmap_fragment',
+                    /* glsl */ `#include <roughnessmap_fragment>
+                    roughnessFactor = mix(0.72, roughnessFactor, carPaintGloss);`,
+                ],
+                [
+                    'lights_physical_fragment',
+                    /* glsl */ `#include <lights_physical_fragment>
+                    #ifdef USE_CLEARCOAT
+                        material.clearcoat *= mix(0.11, 1.0, carPaintGloss);
+                        material.clearcoatRoughness = max(material.clearcoatRoughness, mix(0.42, 0.2, carPaintGloss));
+                    #endif`,
+                ],
+            ],
+        });
     }
 
     return material;
