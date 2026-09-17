@@ -235,7 +235,12 @@ export const PRESETS = Object.freeze({
         sky: { turbidity: 6, rayleigh: 2.2, mieCoefficient: 0.005, mieDirectionalG: 0.8 },
         skyElevation: -12,
         hdri: false,
-        hemisphere: 0.35,
+        // Floodlit asphalt and grandstands bounce neutral light even under a
+        // black sky. Keep this separate from sky/fog brightness so carbon and
+        // tyre sidewalls retain shape without lifting the whole night image.
+        hemisphere: 0.95,
+        hemisphereSky: 0xc4c9d0,
+        hemisphereGround: 0x898b8e,
         sunSprite: 0,
         exposureScale: 0.88,
         cloudTint: 0x1b2233,
@@ -896,8 +901,8 @@ export function createAtmosphere({
 
     // ── Hemisphere ───────────────────────────────────────────────────────────
     const hemisphereColours = {
-        sky: new THREE.Color(),
-        ground: new THREE.Color(circuit.terrain.base),
+        sky: new THREE.Color(preset.hemisphereSky ?? 0xffffff),
+        ground: new THREE.Color(preset.hemisphereGround ?? circuit.terrain.base),
         intensity: preset.hemisphere,
     };
 
@@ -926,7 +931,9 @@ export function createAtmosphere({
         if (scene.fog) {
             scene.fog.color.copy(h);
         }
-        hemisphereColours.sky.copy(h).lerp(z, 0.4).lerp(white, 0.15);
+        if (preset.hemisphereSky === undefined) {
+            hemisphereColours.sky.copy(h).lerp(z, 0.4).lerp(white, 0.15);
+        }
         if (hemisphere) {
             hemisphere.color.copy(hemisphereColours.sky);
             hemisphere.groundColor.copy(hemisphereColours.ground);

@@ -41,7 +41,7 @@ class GameSessionEvent extends Model
         'page_hidden' => 'Скрит раздел',
         'page_left' => 'Напусната страница',
         'error' => 'Техническа грешка',
-        'lap_submitted' => 'Обиколка изпратена за класация',
+        'lap_submitted' => 'Резултат изпратен за класация',
         'lap_save_failed' => 'Проблем при запис за класация',
     ];
 

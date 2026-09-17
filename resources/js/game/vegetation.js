@@ -27,6 +27,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { applyPatch } from './materialPatch.js';
 import { runoffRanges } from './sim.js';
+import { createCanopyTexture, createTreeGeometry, patchCanopyNormals } from './treeCanopy.js';
 
 /**
  * Посоката на вятъра в XZ (единичен вектор). Една за цялата сцена — знамена,
@@ -872,9 +873,27 @@ function buildNearForest(ctx, placements) {
         list.push(p);
     }
 
-    const material = litMaterial(lowPower, { vertexColors: true, roughness: 0.9 });
+    const canopy = createCanopyTexture(ctx.maxAniso);
+    const material = litMaterial(lowPower, {
+        map: canopy,
+        vertexColors: true,
+        roughness: 0.95,
+        alphaTest: 0.4,
+        side: THREE.DoubleSide,
+    });
+    material.alphaToCoverage = lowPower;
     windPatch(ctx, material, 'tree');
-    ctx.disposables.push(material);
+    patchCanopyNormals(material);
+    ctx.disposables.push(material, canopy);
+
+    // The shadow uses the same cutout and wind as the visible leaf clusters.
+    // Keep one shared depth material, just as with the former solid crowns.
+    const depth = lowPower ? null : depthMaterialFor(ctx, 'tree');
+    if (depth) {
+        depth.map = canopy;
+        depth.alphaTest = material.alphaTest;
+        depth.side = THREE.DoubleSide;
+    }
 
     const meshes = [];
     const matrix = new THREE.Matrix4();
@@ -885,7 +904,7 @@ function buildNearForest(ctx, placements) {
     const tint = new THREE.Color();
 
     for (const [kind, chunks] of byKind) {
-        const geometry = treeGeometry(kind, look.foliage, lowPower ? 0 : 1);
+        const geometry = createTreeGeometry(kind, look.foliage, lowPower);
         ctx.disposables.push(geometry);
 
         const ordered = [...chunks.keys()].sort((a, b) => a - b);
@@ -928,84 +947,13 @@ function buildNearForest(ctx, placements) {
             mesh.castShadow = !lowPower;
             mesh.receiveShadow = true;
             if (!lowPower) {
-                mesh.customDepthMaterial = depthMaterialFor(ctx, 'tree');
+                mesh.customDepthMaterial = depth;
             }
             meshes.push(mesh);
         }
     }
 
     return meshes;
-}
-
-/**
- * Геометрията на едно дърво: широколистно = ствол + 3 наслагани икосаедрични
- * корони, иглолистно = ствол + 2 конуса + връх, храст = сплескана топка.
- * Вертексни цветове с вертикален градиент (по-тъмно долу — короната се
- * засенчва сама) и ситен per-vertex шум срещу плоските фасети.
- *
- * @param {'deciduous'|'conifer'|'shrub'} kind
- * @param {number} foliage
- * @param {0|1} detail Икосаедрична подробност: 0 на телефон (70 tri), 1 на десктоп (250 tri)
- * @returns {THREE.BufferGeometry}
- */
-function treeGeometry(kind, foliage, detail) {
-    const parts = [];
-    // mergeGeometries отказва микс от indexed и non-indexed — нормализираме.
-    const add = (geometry, color, gradient) => {
-        const flat = geometry.index ? geometry.toNonIndexed() : geometry;
-        if (flat !== geometry) {
-            geometry.dispose();
-        }
-        paintGradient(flat, color, gradient);
-        parts.push(flat);
-    };
-
-    if (kind === 'shrub') {
-        const bush = new THREE.IcosahedronGeometry(1.5, detail);
-        bush.scale(1, 0.62, 1);
-        bush.translate(0, 0.85, 0);
-        add(bush, foliage, 0.35);
-        const side = new THREE.IcosahedronGeometry(0.9, detail);
-        side.scale(1, 0.7, 1);
-        side.translate(1.1, 0.55, 0.4);
-        add(side, foliage, 0.35);
-    } else if (kind === 'deciduous') {
-        const trunk = new THREE.CylinderGeometry(0.26, 0.36, 3.0, 5);
-        trunk.translate(0, 1.5, 0);
-        add(trunk, COLORS.trunk, 0.15);
-
-        const crown = new THREE.IcosahedronGeometry(2.6, detail);
-        crown.translate(0, 4.8, 0);
-        add(crown, foliage, 0.32);
-        const crownRight = new THREE.IcosahedronGeometry(2.1, detail);
-        crownRight.translate(0.9, 6.4, 0.5);
-        add(crownRight, foliage, 0.28);
-        const crownLeft = new THREE.IcosahedronGeometry(1.9, detail);
-        crownLeft.translate(-0.8, 6.9, -0.4);
-        add(crownLeft, foliage, 0.25);
-    } else {
-        const trunk = new THREE.CylinderGeometry(0.22, 0.32, 2.6, 5);
-        trunk.translate(0, 1.3, 0);
-        add(trunk, COLORS.trunk, 0.15);
-
-        const lower = new THREE.ConeGeometry(2.3, 5.0, 7);
-        lower.translate(0, 4.4, 0);
-        add(lower, foliage, 0.3);
-        const upper = new THREE.ConeGeometry(1.6, 4.2, 7);
-        upper.translate(0, 6.6, 0);
-        add(upper, foliage, 0.25);
-        const tip = new THREE.ConeGeometry(0.8, 2.6, 5);
-        tip.translate(0, 9.1, 0);
-        add(tip, foliage, 0.2);
-    }
-
-    const geometry = mergeGeometries(parts, false);
-    for (const part of parts) {
-        part.dispose();
-    }
-    geometry.computeBoundingSphere();
-
-    return geometry;
 }
 
 /**

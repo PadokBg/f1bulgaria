@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Jobs\ValidateGameLapJob;
 use App\Models\GameLapRecord;
 use App\Models\User;
+use App\Services\Game\NodeReplayRunner;
 
 /**
  * Истински end-to-end: PHP job → Node валидатор → същата симулация.
@@ -51,7 +52,7 @@ it('потвърждава истинска обиколка чрез преиг
         'lap_ticks' => 999,
     ]);
 
-    (new ValidateGameLapJob($record->id))->handle();
+    (new ValidateGameLapJob($record->id))->handle(new NodeReplayRunner);
 
     $record->refresh();
 
@@ -82,7 +83,7 @@ it('отхвърля обиколка с подправено (по-бързо) 
         'verify_status' => 'pending',
     ]);
 
-    (new ValidateGameLapJob($record->id))->handle();
+    (new ValidateGameLapJob($record->id))->handle(new NodeReplayRunner);
 
     $record->refresh();
 
@@ -104,7 +105,7 @@ it('счупен трейс дава rejected, а не 500', function () {
         'verify_status' => 'pending',
     ]);
 
-    (new ValidateGameLapJob($record->id))->handle();
+    (new ValidateGameLapJob($record->id))->handle(new NodeReplayRunner);
 
     expect($record->refresh()->verify_status)->toBe('rejected');
 })->skip(
@@ -121,7 +122,7 @@ it('отхвърля чакащ job от стара симулация без д
         'verify_status' => 'pending',
     ]);
 
-    (new ValidateGameLapJob($record->id))->handle();
+    (new ValidateGameLapJob($record->id))->handle(new NodeReplayRunner);
 
     expect($record->refresh()->verify_status)->toBe('rejected');
 });

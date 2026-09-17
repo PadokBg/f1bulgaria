@@ -17,7 +17,6 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { createAtmosphere } from './atmosphere.js';
 import { createAsphaltTextures } from './asphaltTexture.js';
-import { driveAutopilot } from './autopilot.js';
 import {
     attachCarModel,
     buildCar,
@@ -30,7 +29,6 @@ import {
 import { createChaseCamera } from './camera.js';
 import { createCarEffects } from './carEffects.js';
 import { circuitFor } from './circuits.js';
-import { resolveCarContacts } from './collisions.js';
 import { createCascadedShadows } from './csm.js';
 import { consumeShift, gamepadConnected, hapticPulse, readGamepad } from './gamepad.js';
 import { applyNightSheen, createNightLights } from './nightLights.js';
@@ -50,6 +48,22 @@ import {
     encodeFrames,
     encodeTrace,
 } from './sim.js';
+import {
+    RACE_PENALTY_MS,
+    RACE_TOTAL_LAPS,
+    RACE_VERSION,
+    classifyRace,
+    createRace,
+    encodeRaceTrace,
+    gridRace,
+    gridSlot,
+    raceGap,
+    racePenalties,
+    recordTimingAt,
+    stepRace,
+    trackWrap,
+} from './race.js';
+import { hashString, mulberry32 } from './random.js';
 import { createEngineSound } from './sound.js';
 import { isMobileDevice } from './device.js';
 import { shouldCaptureGameKey } from './keyboard.js';
@@ -84,14 +98,23 @@ const LIVERIES = [0x2563eb, 0xff7a00, 0x00a36c, 0xd7d7de, 0xe6007e, 0xf5c400];
 /** Измислени имена на ботовете за класирането — никакви реални пилоти. */
 const BOT_NAMES = ['В. Колев', 'М. Петров', 'Г. Илиев', 'Д. Стоянов', 'Н. Радев', 'Х. Марков'];
 
-/** Дистанция на състезанието, обиколки (обиколка 1 тръгва от решетката). */
-const RACE_TOTAL_LAPS = 3;
+/** Радар за кола отстрани: докъде напред/назад и встрани се „вижда", м. */
+const RADAR_ALONG = 7;
+const RADAR_LATERAL = 6;
 
-/** Стартова процедура (състезание): интервал между светлините и решетката. */
+/** Радиото: най-много едно съобщение на толкова стъпки (без наказанията). */
+const RADIO_GAP_TICKS = Math.round(1.5 / FIXED_DT);
+/** Смяна на позиция се казва, щом се задържи толкова (страна до страна трепти). */
+const RADIO_POSITION_SETTLE_TICKS = Math.round(1 / FIXED_DT);
+/** Кола зад теб на по-малко от толкова секунди = атака. */
+const RADIO_ATTACK_GAP = 0.6;
+const RADIO_ATTACK_COOLDOWN_TICKS = Math.round(25 / FIXED_DT);
+/** Грешка на бот се казва, ако е на по-малко от толкова метра от теб. */
+const RADIO_MISTAKE_RANGE = 250;
+
+/** Стартова процедура (състезание): интервал между светлините. Решетката,
+ *  дистанцията и наказанията живеят в race.js — сървърът ги преиграва. */
 const LAUNCH_LIGHT_INTERVAL = 0.85; // s между палене на две светлини
-const GRID_ROW_GAP = 7; // m между редовете на решетката
-const GRID_FIRST_ROW = 6; // m от стартовата линия до първия ред
-const GRID_LATERAL = 1.6; // m шахматно отместване от осевата линия
 
 /** Веене на карирания флаг на маршала — скорост (rad/s) и амплитуда (rad). */
 const FLAG_WAVE_SPEED = 8;
@@ -402,7 +425,6 @@ export class Game {
         this.skidMarks = new SkidMarks(this.scene, { lowPower: this.lowPower, quality: this.quality });
         this.playerSkidWriter = this.skidMarks.createWriter(this.carRig, this.playerEmitter);
         this.pendingImpact = null;
-        this._contacts = [];
         this.lastWallHitTick = -1;
         this.wasLocking = false;
 
@@ -536,12 +558,15 @@ export class Game {
         this.lastLapAnalysis = null;
         this.lapAnalysis = createLapAnalysisRecorder(this.track);
 
-        // AI съперници („състезание"): всеки със собствена детерминирана
-        // симулация + автопилот. НЕ пипат физиката на играча — виж setOpponents.
+        // AI съперници („състезание"): полето живее в race.js (детерминирана
+        // симулация, която сървърът преиграва); тук са записите му + ригове.
+        this.race = null;
         this.opponents = [];
-        // Място в „състезанието" (позиция П1..Пn): цели обиколки + прогрес,
-        // следи се и за играча.
+        // Място в „състезанието" (позиция П1..Пn): цели обиколки + прогрес.
+        // В състезание това е race.playerLaps (брои се на всеки тик).
         this.playerRace = { laps: 0, lastProgress: 0 };
+        // Бойната обиколка 1 вече е отчетена в телеметрията.
+        this.outLapReported = false;
         // Стартова процедура: {elapsed, hold} докато тече отброяването със
         // светлините — симулацията е замразена, никой не потегля преди гасене.
         this.launch = null;
@@ -551,6 +576,14 @@ export class Game {
         // Финал на състезанието: {position, standings} след RACE_TOTAL_LAPS.
         this.raceResult = null;
         this.onRaceFinish = () => {};
+        // Окончателното класиране, когато полето доизкара след флага.
+        this.onRaceClassification = () => {};
+        // Радио съобщенията от състезанието: {id, text, tone}.
+        this.onRaceMessage = () => {};
+        // Задочният съперник: реално състезание на играч от класацията като
+        // полупрозрачна кола без контакт (виж setRaceRival).
+        this.raceRival = null;
+        this.radio = createRadioState();
 
         // Соло резултатният екран пада симетрично на подиума: вътрешен reset
         // (R / „Рестарт" по време на реплей) чисти и Vue състоянието през това.
@@ -599,7 +632,6 @@ export class Game {
         // Преизползвани обекти (нула алокации/кадър в hot path) + акумулатори.
         this._render = {};
         this._carDyn = {};
-        this._contactCars = [];
         this._soundExtras = {
             kerb: false,
             gravel: false,
@@ -644,7 +676,7 @@ export class Game {
         // и EMA-то още се сийдва — не е сигнал за стъпка.
         this.scaleCooldown = GOVERNOR.downCooldown;
         this.autoQualitySlowSeconds = 0;
-        this.playerRace = { laps: 0, lastProgress: this.sim.lastProgress };
+        this.#resetPlayerRace();
         this.sound.start();
         this.onLaunch(this.launch ? 0 : null);
         this.#notify(this.onAttemptStart);
@@ -822,10 +854,13 @@ export class Game {
         this.raceResult = null;
         this.onRaceFinish(null);
         this.onResultClear();
+        if (this.race) {
+            gridRace(this.race);
+        }
         this.#gridOpponents();
         this.#gridPlayer();
         this.#armLaunch();
-        this.playerRace = { laps: 0, lastProgress: this.sim.lastProgress };
+        this.#resetPlayerRace();
         this.#placeCameraBehindCar();
         if (this.started) {
             this.#notify(this.onAttemptStart);
@@ -864,12 +899,45 @@ export class Game {
     }
 
     /**
+     * Задочна битка: най-доброто състезание на играч от класацията
+     * „Състезание" кара в твоето като полупрозрачна кола — без контакт, но с
+     * интервал в кулата, радио на всяка обиколка и сравнение на финала.
+     * Кадрите тръгват от гасенето на светлините, затова времето се подравнява
+     * по часовника на състезанието.
+     *
+     * @param {{frames: string, name: string, total_ms: number, race_ms: number,
+     *          penalties: number, race_ticks: number|null}} data
+     * @returns {boolean}
+     */
+    setRaceRival(data) {
+        const frames = decodeFrames(data.frames);
+        if (!frames || frames.length < 6) {
+            return false;
+        }
+
+        this.raceRival = {
+            frames,
+            name: data.name,
+            totalMs: data.total_ms,
+            raceMs: data.race_ms,
+            penalties: data.penalties,
+            raceTicks: data.race_ticks ?? Math.floor(frames.length / 3) * FRAME_EVERY,
+            timing: null,
+        };
+        this.#resetRaceRivalTiming();
+        this.ghostDriver?.reset();
+        tintGhostRig(this.ghostRig, 0xe879f9); // фуксия = съперник от класацията
+
+        return true;
+    }
+
+    /**
      * Конфигурира AI съперниците (вика се от pre-start екрана, преди start()).
      *
-     * В състезание колите СЕ БЛЪСКАТ (collisions.js) — и играчът. Именно
-     * затова състезателните времена не отиват в класацията: сървърният
-     * реплей не може да възпроизведе чужди удари. Класацията се кара „Сам
-     * на пистата", където физиката на играча е чиста функция от входа му.
+     * В състезание колите СЕ БЛЪСКАТ (collisions.js) — и играчът. Полето е
+     * чиста детерминирана симулация (race.js): сървърът преиграва целия
+     * запис, заедно с ботовете и ударите, и времето отива в класацията
+     * „Състезание" — отделна от обиколките „Сам на пистата".
      *
      * @param {number} count 0 = сам на пистата
      */
@@ -880,8 +948,10 @@ export class Game {
             return;
         }
 
-        // Детерминирано по пистата — една и съща решетка при всеки рестарт.
-        const rand = mulberry32(hashString(this.track.slug));
+        // Полето + решетката: симулациите и параметрите на ботовете идват от
+        // race.js (детерминирано по пистата); тук им се закачат ригове.
+        this.race = createRace(this.sim, count);
+        this.opponents = this.race.opponents;
 
         // Геометрията на болида е идентична за всички ботове — първият риг я
         // дава на останалите (5× по-малко GPU буфери). Материалите остават
@@ -889,12 +959,7 @@ export class Game {
         let templateGeometries = null;
 
         for (let i = 0; i < count; i++) {
-            // Ботът дели готовите повърхностни таблици на играча (същата
-            // писта) — без 5 повторни скана на кривината при „Карай".
-            const sim = createSim(this.track, this.circuit, this.sim);
-            // Обиколките на ботовете не интересуват никого — без запис и без
-            // наказателен телепорт на старта (само локалното връщане).
-            sim.recordEnabled = false;
+            const opp = this.opponents[i];
 
             // Телефон: ботовете не хвърлят сянка — 5 × 16 меша в 512 картата
             // всеки кадър бяха най-скъпият ред в състезателния режим.
@@ -941,23 +1006,14 @@ export class Game {
                     seed: hashString(`${this.track.slug}:${i}`),
                 });
 
-            this.opponents.push({
-                sim,
+            // Само презентация — автопилотът чете от същия обект единствено
+            // полетата, които race.js е сложил (темпо, линия, others).
+            Object.assign(opp, {
                 rig,
                 emitter,
                 skidWriter,
                 effects,
                 drivetrain: createDrivetrain(false),
-                input: { steer: 0, throttle: 0, brake: 0 },
-                // Разлики в темпото/линията — полето да не кара в индийска нишка.
-                pace: 0.9 + rand() * 0.22,
-                steerGain: 2.65 + rand() * 0.35,
-                lookBias: (rand() - 0.5) * 6,
-                // Малка лична вариация ВЪРХУ състезателната линия (raceOffset).
-                lineOffset: (rand() - 0.5) * 1.6,
-                slotJitter: rand() * 0.5,
-                laps: 0,
-                lastProgress: 0,
                 prevX: 0,
                 prevZ: 0,
                 prevHeading: 0,
@@ -966,19 +1022,10 @@ export class Game {
             });
         }
 
-        // Кой кого вижда (за избягването): СИМУЛАЦИИТЕ са стабилни обекти
-        // (reset мутира state на място, не го подменя), затова референциите
-        // остават живи и след престрояване; recovering се чете от самата сим.
-        for (const opp of this.opponents) {
-            opp.others = [
-                this.sim,
-                ...this.opponents.filter((o) => o !== opp).map((o) => o.sim),
-            ];
-        }
-
         this.#gridOpponents();
         this.#gridPlayer();
         this.#armLaunch();
+        this.#resetPlayerRace();
         // GLB материалите се добавят след първоначалния ready/warm-up. CSM
         // трябва да ги patch-не преди първия grid кадър, иначе всяка каскада
         // се сумира като отделно слънце до следващия периодичен scan.
@@ -1988,7 +2035,7 @@ export class Game {
                 return;
             }
             this.ghost = { frames, lapTicks: parsed.lapTicks, official: true };
-            if (!this.rivalGhost) {
+            if (!this.rivalGhost && !this.raceRival) {
                 tintGhostRig(this.ghostRig, 0xf2c14e); // златист = официалният
             }
             // Ако pre-start екранът още стои — духът тръгва като демо.
@@ -2003,7 +2050,7 @@ export class Game {
         if (!template || this.disposed || !this.ghostRig) {
             return;
         }
-        const tint = this.rivalGhost ? 0xe879f9 : this.ghost?.official ? 0xf2c14e : 0x9fc8ff;
+        const tint = this.rivalGhost || this.raceRival ? 0xe879f9 : this.ghost?.official ? 0xf2c14e : 0x9fc8ff;
         const previous = this.ghostRig;
         const next = buildGhostRigFromTemplate(template, tint);
         next.root.visible = previous.root.visible;
@@ -2024,7 +2071,7 @@ export class Game {
     #saveGhost(frames, lapTicks) {
         // Духът в паметта се обновява ВИНАГИ — квотата на localStorage може
         // да провали само персистирането, не тазсесийния съперник.
-        if (this.ghost?.official && !this.rivalGhost) {
+        if (this.ghost?.official && !this.rivalGhost && !this.raceRival) {
             tintGhostRig(this.ghostRig, 0x9fc8ff); // вече е личният, син
         }
         this.ghost = { frames, lapTicks };
@@ -2195,15 +2242,13 @@ export class Game {
      */
     #onLapFinished(event) {
         this.#notify(this.onLapCompleted, { lapMs: event.lapMs, valid: event.valid, untimed: false });
-        // Състезание: няма резултатен екран по средата — следващата обиколка
-        // се въоръжава ВЕДНАГА (не през 'formation', иначе се хронометрира
-        // само всяка втора). Кадрите на ПОСЛЕДНАТА обиколка хранят ТВ реплея
-        // на подиума; финалът идва от #finishRace след RACE_TOTAL_LAPS.
-        if (this.opponents.length > 0) {
+        // Състезание: няма резултатен екран по средата — race.js вече е
+        // въоръжил следващата обиколка в същия тик. Кадрите на ПОСЛЕДНАТА
+        // обиколка хранят ТВ реплея на подиума; финалът идва от #finishRace.
+        if (this.race) {
             if (event.frames) {
                 this.lastLapFrames = event.frames;
             }
-            this.sim.rearmFlyingLap();
             return;
         }
 
@@ -2238,6 +2283,252 @@ export class Game {
             trace: event.trace ? encodeTrace(event.trace) : null,
             simVersion: SIM_VERSION,
         });
+    }
+
+    /**
+     * Една стъпка на цялото поле през race.js — същата функция, която
+     * сървърът преиграва. Тук остава само презентацията: предишните позиции
+     * за интерполация и най-силният удар с участие на играча (искри + звук).
+     *
+     * @returns {object|null} Завършена хронометрирана обиколка на играча
+     */
+    #stepRaceTick() {
+        for (const opp of this.opponents) {
+            const os = opp.sim.state;
+            opp.prevX = os.x;
+            opp.prevZ = os.z;
+            opp.prevHeading = os.heading;
+        }
+
+        const step = stepRace(this.race, this.input);
+        const state = this.sim.state;
+
+        for (const event of this.race.events) {
+            this.#radioEvent(event);
+        }
+        if (step.classified) {
+            const classification = this.#raceClassificationView();
+            this.#notify(this.onRaceClassification, {
+                position: this.race.result.finalPosition,
+                classification,
+                standings: standingsOf(classification),
+            });
+        }
+
+        for (const contact of this.race.contacts) {
+            if (contact.a !== state && contact.b !== state) {
+                continue;
+            }
+            if (contact.impulse < 1.2) {
+                continue;
+            }
+            if (this.pendingImpact === null || contact.impulse > this.pendingImpact.impulse) {
+                this.pendingImpact = contact;
+            }
+        }
+
+        return step.playerEvent;
+    }
+
+    /** Броячът на обиколките на играча: в състезание е този на race.js. */
+    #resetPlayerRace() {
+        this.playerRace = this.race ? this.race.playerLaps : { laps: 0, lastProgress: this.sim.lastProgress };
+        this.outLapReported = false;
+        this.radio = createRadioState();
+        this.#resetRaceRivalTiming();
+    }
+
+    /** Хронометражът на задочния съперник тръгва от слота на играча. */
+    #resetRaceRivalTiming() {
+        if (!this.raceRival) {
+            return;
+        }
+        if (!this.race) {
+            this.raceRival.timing = null;
+            return;
+        }
+        this.raceRival.timing = {
+            laps: 0,
+            lastProgress: gridSlot(this.track, this.opponents.length).progress,
+            timingPoint: -1,
+            passTicks: new Float64Array(this.race.timingPoints).fill(-1),
+            finished: false,
+        };
+        this.ghostDriver?.reset();
+    }
+
+    /**
+     * Радар за кола отстрани: колко близо е най-близката кола отляво и отдясно
+     * на ЕКРАНА (0..1). Страничната ос на физиката (cos h, −sin h) се рендерира
+     * наляво — виж бележката при vLateral в physics.js.
+     *
+     * @returns {{left: number, right: number}}
+     */
+    #radar() {
+        const state = this.sim.state;
+        const sin = Math.sin(state.heading);
+        const cos = Math.cos(state.heading);
+        let left = 0;
+        let right = 0;
+
+        for (const opp of this.opponents) {
+            if (opp.sim.recovering) {
+                continue;
+            }
+            const dx = opp.sim.state.x - state.x;
+            const dz = opp.sim.state.z - state.z;
+            const along = dx * sin + dz * cos;
+            const lateral = dx * cos - dz * sin;
+            const side = Math.abs(lateral);
+            if (Math.abs(along) > RADAR_ALONG || side > RADAR_LATERAL || side < 0.6) {
+                continue;
+            }
+            const closeness = Math.min(1, (RADAR_LATERAL - side) / 3) * Math.min(1, (RADAR_ALONG - Math.abs(along)) / 2);
+            if (lateral > 0) {
+                left = Math.max(left, closeness);
+            } else {
+                right = Math.max(right, closeness);
+            }
+        }
+
+        return { left, right };
+    }
+
+    /**
+     * Радиото: кратко съобщение + сигнал. Наказанията минават винаги,
+     * останалото — най-много едно на RADIO_GAP_TICKS.
+     *
+     * @param {string} text
+     * @param {'info'|'good'|'bad'} tone
+     * @param {boolean} [priority]
+     */
+    #say(text, tone, priority = false) {
+        const clock = this.race?.clock ?? 0;
+        if (!priority && clock - this.radio.lastSaid < RADIO_GAP_TICKS) {
+            return;
+        }
+        this.radio.lastSaid = clock;
+        this.radio.sequence++;
+        this.sound.beep(tone === 'bad' ? 560 : 1320, 0.05);
+        this.#notify(this.onRaceMessage, { id: this.radio.sequence, text, tone });
+    }
+
+    /** Събития от race.js (наказания, грешки, DRS) → радио. */
+    #radioEvent(event) {
+        const race = this.race;
+        const me = race.playerLaps;
+        const name = (entry) => BOT_NAMES[entry.opponentIndex % BOT_NAMES.length];
+
+        if (event.type === 'penalty' && event.entry === me) {
+            this.#say(
+                event.reason === 'contact' ? 'Наказание +5 s — удар отзад' : 'Наказание +5 s — излизане от пистата',
+                'bad',
+                true
+            );
+        } else if (event.type === 'penalty' && event.reason === 'contact' && event.victim === me) {
+            this.#say(`${name(event.entry)} получи +5 s за удара в теб`, 'good', true);
+        } else if (event.type === 'mistake' && race.result === null) {
+            let along = event.entry.sim.lastProgress - me.lastProgress;
+            if (along < -0.5) along += 1;
+            if (along > 0.5) along -= 1;
+            if (Math.abs(along * this.track.length) <= RADIO_MISTAKE_RANGE) {
+                this.#say(event.big ? `${name(event.entry)} излезе от пистата!` : `${name(event.entry)} изпусна спирането`, 'info');
+            }
+        } else if (event.type === 'drs' && event.entry === me && event.state === 'available') {
+            this.#say('DRS е наличен', 'good');
+        }
+    }
+
+    /**
+     * Радио от състоянието на полето (30 Hz): смяна на позиция, атака отзад,
+     * последна обиколка, разлика до задочния съперник на линията.
+     */
+    #radioTelemetry(rows, position) {
+        const race = this.race;
+        const radio = this.radio;
+        const me = race.playerLaps;
+        if (race.result !== null || race.clock < RADIO_POSITION_SETTLE_TICKS * 5) {
+            radio.position = position;
+            return;
+        }
+
+        const field = rows.filter((row) => !row.isRival);
+        const mine = field.findIndex((row) => row.isPlayer);
+
+        if (radio.position === null) {
+            radio.position = position;
+        } else if (position !== radio.position) {
+            if (radio.pendingPosition !== position) {
+                radio.pendingPosition = position;
+                radio.pendingSince = race.clock;
+            } else if (race.clock - radio.pendingSince >= RADIO_POSITION_SETTLE_TICKS) {
+                const gained = position < radio.position;
+                const other = field[gained ? mine + 1 : mine - 1];
+                if (other?.name) {
+                    this.#say(
+                        gained ? `П${position}! Изпревари ${other.name}` : `${other.name} те изпревари — П${position}`,
+                        gained ? 'good' : 'bad'
+                    );
+                }
+                radio.position = position;
+                radio.pendingPosition = null;
+            }
+        } else {
+            radio.pendingPosition = null;
+        }
+
+        if (!radio.lastLapSaid && me.laps === RACE_TOTAL_LAPS) {
+            radio.lastLapSaid = true;
+            this.#say('Последна обиколка!', 'info', true);
+        }
+
+        const behind = field[mine + 1];
+        if (behind && behind.name) {
+            const gap = raceGap(race, behind.entry, me);
+            const seconds = gap.ticks === null ? null : gap.ticks * FIXED_DT;
+            const lastWarned = radio.attackSaid.get(behind.name) ?? -Infinity;
+            if (seconds !== null && seconds <= RADIO_ATTACK_GAP && race.clock - lastWarned >= RADIO_ATTACK_COOLDOWN_TICKS) {
+                radio.attackSaid.set(behind.name, race.clock);
+                this.#say(`${behind.name} е на ${seconds.toFixed(1)} s зад теб`, 'info');
+            }
+        }
+
+        const rival = this.raceRival?.timing;
+        if (rival && me.laps >= 2 && me.laps !== radio.rivalLapSaid && me.laps <= RACE_TOTAL_LAPS) {
+            radio.rivalLapSaid = me.laps;
+            const rivalAhead = rival.laps + rival.lastProgress > me.laps + me.lastProgress;
+            const gap = rivalAhead ? raceGap(race, me, rival) : raceGap(race, rival, me);
+            if (gap.ticks !== null) {
+                const seconds = (gap.ticks * FIXED_DT).toFixed(1);
+                this.#say(
+                    rivalAhead ? `Спрямо ${this.raceRival.name}: +${seconds} s` : `Спрямо ${this.raceRival.name}: −${seconds} s`,
+                    rivalAhead ? 'bad' : 'good'
+                );
+            }
+        }
+    }
+
+    /**
+     * Класирането за подиума (временно при флага, окончателно след полето).
+     *
+     * @returns {Array<object>}
+     */
+    #raceClassificationView() {
+        const rows = classifyRace(this.race);
+        const winner = rows[0];
+
+        return rows.map((row, i) => ({
+            position: i + 1,
+            name: row.opponentIndex === null ? null : BOT_NAMES[row.opponentIndex % BOT_NAMES.length],
+            isPlayer: row.opponentIndex === null,
+            finished: row.finished,
+            totalMs: row.totalMs,
+            gapMs: i > 0 && row.finished && winner.finished ? row.totalMs - winner.totalMs : null,
+            lapsDown: row.lapsDown,
+            penalties: row.penalties,
+            bestLapMs: row.bestLapMs,
+            fastestLap: row.fastestLap,
+        }));
     }
 
     #frame = (now) => {
@@ -2307,7 +2598,7 @@ export class Game {
             prevHeading = state.heading;
 
             const phaseBefore = sim.phase;
-            const event = sim.tick(this.input);
+            const event = this.race ? this.#stepRaceTick() : sim.tick(this.input);
             if (phaseBefore !== 'flying' && sim.phase === 'flying') {
                 this.lapAnalysis.reset();
             }
@@ -2321,90 +2612,36 @@ export class Game {
                 this.#onLapFinished(event);
             }
 
-            // Съперниците тиктакат в същия фиксиран ритъм, всеки в своя
-            // симулация.
-            for (const opp of this.opponents) {
-                const os = opp.sim.state;
-                opp.prevX = os.x;
-                opp.prevZ = os.z;
-                opp.prevHeading = os.heading;
-
-                driveAutopilot(opp.sim, opp.input, opp);
-                const oppEvent = opp.sim.tick(opp.input);
-                if (oppEvent?.type === 'finished') {
-                    // Ботът не спира на резултатен екран — направо нова
-                    // обиколка (и recovery мрежата остава активна).
-                    opp.sim.phase = 'formation';
-                }
-            }
-
-            // Контактите: всички коли се блъскат (и играчът). Затова времената
-            // от състезание не отиват в класацията — сървърът не може да
-            // преиграе чужди удари. Кола в „Връщане на пистата" е извадена.
-            if (this.opponents.length > 0) {
-                const cars = this._contactCars;
-                cars.length = 0;
-                if (!sim.recovering) {
-                    cars.push(state);
-                }
-                for (const opp of this.opponents) {
-                    if (!opp.sim.recovering) {
-                        cars.push(opp.sim.state);
-                    }
-                }
-                resolveCarContacts(cars, this._contacts);
-
-                // Ударите С УЧАСТИЕ на играча хранят искри + звук (веднъж на
-                // кадър — най-силният).
-                for (const contact of this._contacts) {
-                    if (contact.a !== state && contact.b !== state) {
-                        continue;
-                    }
-                    if (contact.impulse < 1.2) {
-                        continue;
-                    }
-                    if (this.pendingImpact === null || contact.impulse > this.pendingImpact.impulse) {
-                        this.pendingImpact = contact;
-                    }
-                }
-            }
-
             this.accumulator -= FIXED_DT;
         }
 
-        // Изминат път за позицията П1..Пn — праговете хващат и пресичане на
-        // линията, и връщане назад (телепорт от recovery през линията).
-        trackWrap(this.playerRace, sim.lastProgress);
-        for (const opp of this.opponents) {
-            trackWrap(opp, opp.sim.lastProgress);
+        // Изминат път за позицията П1..Пn — в състезание race.js го брои на
+        // всеки тик; соло праговете хващат пресичане и телепорт назад.
+        if (!this.race) {
+            trackWrap(this.playerRace, sim.lastProgress);
         }
 
         // Първата обиколка на състезанието е бойна (симът я не хронометрира —
-        // виж #gridPlayer), но за играча тя е обиколка 1/3 и телеметрията я
+        // виж gridRace), но за играча тя е обиколка 1/3 и телеметрията я
         // брои като завършена без време. Пресичане №1 е потеглянето от
         // решетката, №2 е краят ѝ. Флагът пази срещу повторно броене при
         // връщане назад през линията; ако симът все пак е хронометрирал
         // тази обиколка (recovery преди линията), тя вече мина през
         // #onLapFinished и не се брои втори път.
         if (
-            this.opponents.length > 0 &&
-            !this.playerRace.outLapReported &&
+            this.race &&
+            !this.outLapReported &&
             lapsBefore === 1 &&
             this.playerRace.laps === 2
         ) {
-            this.playerRace.outLapReported = true;
+            this.outLapReported = true;
             if (!timedLapFinished) {
                 this.#notify(this.onLapCompleted, { lapMs: null, valid: true, untimed: true });
             }
         }
 
-        // Финал на състезанието: пресичане № RACE_TOTAL_LAPS+1 (първото е
-        // потеглянето от решетката) = карирания флаг за играча.
-        if (
-            this.opponents.length > 0 &&
-            !this.raceResult &&
-            this.playerRace.laps > RACE_TOTAL_LAPS
-        ) {
+        // Карираният флаг падна в някой тик от този кадър (race.js).
+        if (this.race?.result && !this.raceResult) {
             this.#finishRace();
         }
 
@@ -2642,32 +2879,48 @@ export class Game {
         // кола физически, позицията пада веднага.
         let position = 1;
         let tower = null;
-        if (this.opponents.length > 0) {
-            const race = this.playerRace;
-            const covered = race.laps + race.lastProgress;
-            for (const opp of this.opponents) {
-                if (opp.laps + opp.lastProgress > covered) {
-                    position++;
-                }
-            }
-
-            // Кулата с позициите: интервал до колата ОТПРЕД, в метри.
-            const entries = [
-                { name: null, isPlayer: true, covered },
-                ...this.opponents.map((opp, i) => ({
-                    name: BOT_NAMES[i % BOT_NAMES.length],
-                    isPlayer: false,
-                    covered: opp.laps + opp.lastProgress,
-                })),
-            ];
-            entries.sort((a, b) => b.covered - a.covered);
-            tower = entries.map((entry, idx) => ({
-                name: entry.name,
-                isPlayer: entry.isPlayer,
-                gap: idx === 0
-                    ? 0
-                    : Math.round((entries[idx - 1].covered - entry.covered) * this.track.length),
+        let radar = null;
+        let drs = null;
+        if (this.race) {
+            const race = this.race;
+            const rows = race.entries.map((entry) => ({
+                entry,
+                name: entry.opponentIndex === null ? null : BOT_NAMES[entry.opponentIndex % BOT_NAMES.length],
+                isPlayer: entry.opponentIndex === null,
+                isRival: false,
+                covered: entry.laps + entry.lastProgress,
             }));
+            const rivalTiming = this.raceRival?.timing;
+            if (rivalTiming) {
+                rows.push({
+                    entry: rivalTiming,
+                    name: this.raceRival.name,
+                    isPlayer: false,
+                    isRival: true,
+                    covered: rivalTiming.laps + rivalTiming.lastProgress,
+                });
+            }
+            rows.sort((a, b) => b.covered - a.covered);
+
+            // Задочният съперник е в кулата, но не и в позицията — не е на пистата.
+            position = rows.filter((row) => !row.isRival).findIndex((row) => row.isPlayer) + 1;
+
+            // Кулата: интервал до колата ОТПРЕД, в секунди (точките на race.js).
+            tower = rows.map((row, idx) => {
+                const gap = idx === 0 ? { ticks: 0, lapped: 0 } : raceGap(race, row.entry, rows[idx - 1].entry);
+
+                return {
+                    name: row.name,
+                    isPlayer: row.isPlayer,
+                    isRival: row.isRival,
+                    gapS: gap.ticks === null ? null : Math.round(gap.ticks * FIXED_DT * 10) / 10,
+                    lapped: gap.lapped,
+                };
+            });
+
+            radar = this.#radar();
+            drs = race.playerLaps.drsOpen ? 'open' : race.playerLaps.drsEligible ? 'available' : null;
+            this.#radioTelemetry(rows, position);
         }
 
         // Живата делта срещу духа (соло/дуел) — зелено/червено в HUD-а.
@@ -2682,7 +2935,7 @@ export class Game {
             const g = this.ghostRig.root.position;
             // Типът оцветява точката като 3D духа: официален златист (2),
             // личен син (3), дуелен фуксия (4) — виж DOT_COLORS в Index.vue.
-            const t = this.rivalGhost ? 4 : this.ghost?.official ? 2 : 3;
+            const t = this.rivalGhost || (this.race && this.raceRival) ? 4 : this.ghost?.official ? 2 : 3;
             mapDots.push({ ...this.minimap.project(g.x, g.z), t });
         }
 
@@ -2709,7 +2962,15 @@ export class Game {
             position,
             fieldSize: this.opponents.length + 1,
             raceLap: this.playerRace.laps,
-            raceTotalLaps: this.opponents.length > 0 ? RACE_TOTAL_LAPS : 0,
+            raceTotalLaps: this.race ? RACE_TOTAL_LAPS : 0,
+            // Излизания дотук в състезанието — всяко е +RACE_PENALTY_MS.
+            racePenalties: this.race ? racePenalties(this.race) : 0,
+            // Слипстрийм зад кола отпред, 0..1 (race.js).
+            draft: this.race ? this.race.playerDraft : 0,
+            // DRS на играча: 'available' след точката за засичане, 'open' в зоната.
+            drs,
+            // Кола отстрани: 0..1 отляво/отдясно на екрана.
+            radar,
             tower,
             ghostDelta,
             delta: ghostDelta,
@@ -2809,32 +3070,31 @@ export class Game {
     /**
      * Карираният флаг: класирането се снима в момента на финала на играча
      * (по място на пистата — изпреварилите ботове са легитимно напред).
+     * Резултатът и записът идват от race.js — същото, което сървърът преиграва.
      */
     #finishRace() {
-        const entries = [
-            {
-                name: null,
-                isPlayer: true,
-                covered: this.playerRace.laps + this.playerRace.lastProgress,
-            },
-            ...this.opponents.map((opp, i) => ({
-                name: BOT_NAMES[i % BOT_NAMES.length],
-                isPlayer: false,
-                covered: opp.laps + opp.lastProgress,
-            })),
-        ];
-
-        entries.sort((a, b) => b.covered - a.covered);
-
-        const standings = entries.map((entry, i) => ({
-            position: i + 1,
-            name: entry.name,
-            isPlayer: entry.isPlayer,
-        }));
+        const result = this.race.result;
+        const classification = this.#raceClassificationView();
+        const rival = this.raceRival;
 
         this.raceResult = {
-            position: standings.find((s) => s.isPlayer).position,
-            standings,
+            // Временна позиция: ботовете зад теб още финишират (виж
+            // onRaceClassification за окончателната).
+            position: result.position,
+            final: false,
+            standings: standingsOf(classification),
+            classification,
+            rival: rival ? { name: rival.name, totalMs: rival.totalMs, deltaMs: result.totalMs - rival.totalMs } : null,
+            raceMs: result.raceMs,
+            penalties: result.penalties,
+            trackLimits: result.trackLimits,
+            contactFaults: result.contactFaults,
+            penaltyMs: result.penalties * RACE_PENALTY_MS,
+            totalMs: result.totalMs,
+            // Записът на входа за класацията „Състезание" (null при преливане).
+            trace: encodeRaceTrace(this.race),
+            simVersion: SIM_VERSION,
+            raceVersion: RACE_VERSION,
         };
         this.sound.fanfare(this.raceResult.position);
         this.onRaceFinish(this.raceResult);
@@ -2918,36 +3178,17 @@ export class Game {
             opp.rig.dispose?.();
         }
         this.opponents = [];
+        this.race = null;
         this.cascadedShadows?.refreshMaterials();
     }
 
     /**
-     * Нарежда решетката: съперниците стоят НЕПОДВИЖНИ зад стартовата линия,
-     * шахматно като истински грид — бот 0 най-отпред, играчът последен (виж
-     * #gridPlayer). Всички потеглят заедно при гаснене на светлините.
+     * Ботовете вече стоят на решетката (gridRace в race.js) — тук само
+     * риговете и интерполацията се залепват за слотовете им.
      */
     #gridOpponents() {
-        const t = this.track;
-        const n = this.opponents.length;
-
-        for (let i = 0; i < n; i++) {
-            const opp = this.opponents[i];
-            const slot = this.#gridSlot(i);
-
-            opp.sim.reset(false);
+        for (const opp of this.opponents) {
             const s = opp.sim.state;
-            s.x = slot.x;
-            s.z = slot.z;
-            s.heading = slot.heading;
-            s.vForward = 0; // стоящ старт — чака светлините
-            opp.sim.trackIndexHint = slot.index;
-            opp.sim.lastProgress = slot.progress;
-            opp.sim.surface.height = slot.height;
-            opp.sim.surface.gradient = t.gradient[slot.index];
-            opp.sim.surface.bank = t.bankSlope[slot.index];
-
-            opp.laps = 0;
-            opp.lastProgress = slot.progress;
             opp.prevX = s.x;
             opp.prevZ = s.z;
             opp.prevHeading = s.heading;
@@ -2958,56 +3199,16 @@ export class Game {
     }
 
     /**
-     * Слот i на решетката (0 = най-отпред, до линията), шахматно ляво/дясно.
-     *
-     * @param {number} i
-     * @returns {{index: number, x: number, z: number, heading: number,
-     *           progress: number, height: number}}
-     */
-    #gridSlot(i) {
-        const t = this.track;
-        const backMeters = GRID_FIRST_ROW + i * GRID_ROW_GAP;
-        const back = Math.round(backMeters / t.spacing) % t.count;
-        const index = (t.count - back) % t.count;
-        const lateral = (i % 2 === 0 ? 1 : -1) * GRID_LATERAL;
-
-        return {
-            index,
-            x: t.xs[index] + t.nx[index] * lateral,
-            z: t.zs[index] + t.nz[index] * lateral,
-            heading: Math.atan2(t.tx[index], t.tz[index]),
-            progress: index / t.count,
-            height: t.ys[index] - lateral * t.bankSlope[index],
-        };
-    }
-
-    /**
-     * Играчът на последния ред на решетката (стоящ, зад линията). Първото
-     * пресичане е потеглянето (gridCrossingsToSkip) — обиколка 1 е бойна,
-     * хронометърът тръгва при следващото минаване на линията, на скорост,
-     * за да са времената сравними с класацията.
+     * Играчът вече е на последния ред на решетката (gridRace в race.js) —
+     * тук се залепват ригът и камерата за слота.
      */
     #gridPlayer() {
-        if (this.opponents.length === 0) {
+        if (!this.race) {
             return;
         }
 
-        const t = this.track;
         const sim = this.sim;
-        const slot = this.#gridSlot(this.opponents.length);
         const s = sim.state;
-
-        s.x = slot.x;
-        s.z = slot.z;
-        s.heading = slot.heading;
-        s.vForward = 0;
-        sim.trackIndexHint = slot.index;
-        sim.lastProgress = slot.progress;
-        sim.surface.height = slot.height;
-        sim.surface.gradient = t.gradient[slot.index];
-        sim.surface.bank = t.bankSlope[slot.index];
-        sim.gridCrossingsToSkip = 1;
-        sim.snapRender = true;
         // Ригът се синхронизира веднага (както при ботовете): по време на
         // стартовата процедура сим стъпки няма, а камерата вече гледа слота —
         // иначе болидът стои на старт-финала, извън кадър, докато светят светлините.
@@ -3195,6 +3396,11 @@ export class Game {
      * хронометър — истинска задочна битка, паузите (гейт) спират и двамата.
      */
     #updateGhost(dt) {
+        if (this.race && this.raceRival?.timing) {
+            this.#updateRaceRival(dt);
+            return;
+        }
+
         const sim = this.sim;
         // Дуелният дух (класацията) има предимство пред личния/официалния.
         const ghost = this.rivalGhost ?? this.ghost;
@@ -3224,6 +3430,40 @@ export class Game {
         this.ghostDriver.sample(frames, position, this.ghostOut);
         this.ghostDriver.applyToRig(this.ghostRig, this.ghostOut, dt);
         this.ghostRig.root.visible = true;
+    }
+
+    /**
+     * Задочният съперник в състезание: кадрите му по часовника на
+     * състезанието (гасенето = кадър 0), плюс хронометраж за кулата.
+     *
+     * @param {number} dt
+     */
+    #updateRaceRival(dt) {
+        const rival = this.raceRival;
+        const timing = rival.timing;
+        const frames = rival.frames;
+        // -1 кадър: frames[k] е състоянието СЛЕД тик 2(k+1) (виж #updateGhost).
+        const position = Math.max(0, this.race.clock / FRAME_EVERY - 1);
+
+        if (position >= this.ghostDriver.frameCount(frames) - 1) {
+            // Съперникът финишира — прибира се; остава в кулата на линията.
+            if (!timing.finished) {
+                timing.finished = true;
+                timing.laps = RACE_TOTAL_LAPS + 1;
+                timing.lastProgress = 0;
+            }
+            this.ghostRig.root.visible = false;
+            return;
+        }
+
+        this.ghostDriver.sample(frames, position, this.ghostOut);
+        this.ghostDriver.applyToRig(this.ghostRig, this.ghostOut, dt);
+        this.ghostRig.root.visible = true;
+
+        if (this.race.clock > 0) {
+            trackWrap(timing, this.ghostOut.lastProgress);
+            recordTimingAt(this.race, timing, Math.round((position + 1) * FRAME_EVERY));
+        }
     }
 
     /**
@@ -3391,55 +3631,27 @@ function buildOpponentRig(color, castShadow) {
     return rig;
 }
 
-/**
- * Брои пресичанията на стартовата линия (в двете посоки) по прогреса.
- *
- * @param {{laps: number, lastProgress: number}} entry
- * @param {number} progress
- */
-function trackWrap(entry, progress) {
-    if (entry.lastProgress > 0.85 && progress < 0.15) {
-        entry.laps++;
-    } else if (entry.lastProgress < 0.15 && progress > 0.85) {
-        entry.laps--;
-    }
-    entry.lastProgress = progress;
-}
-
-/**
- * Детерминиран PRNG (mulberry32) — решетката на съперниците е една и съща
- * при всяко зареждане на пистата.
- *
- * @param {number} seed
- * @returns {() => number} [0, 1)
- */
-function mulberry32(seed) {
-    let a = seed >>> 0;
-
-    return () => {
-        a = (a + 0x6d2b79f5) >>> 0;
-        let t = a;
-        t = Math.imul(t ^ (t >>> 15), t | 1);
-        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+/** Нулево състояние на радиото за ново състезание. */
+function createRadioState() {
+    return {
+        sequence: 0,
+        lastSaid: -Infinity,
+        position: null,
+        pendingPosition: null,
+        pendingSince: 0,
+        lastLapSaid: false,
+        attackSaid: new Map(),
+        rivalLapSaid: 0,
     };
 }
 
 /**
- * FNV-1a хеш на низ → seed за mulberry32.
+ * Подредбата за подиума (2-1-3 блоковете) от класирането.
  *
- * @param {string} value
- * @returns {number}
+ * @param {Array<{position: number, name: string|null, isPlayer: boolean}>} classification
  */
-function hashString(value) {
-    let hash = 2166136261;
-
-    for (let i = 0; i < value.length; i++) {
-        hash ^= value.charCodeAt(i);
-        hash = Math.imul(hash, 16777619);
-    }
-
-    return hash >>> 0;
+function standingsOf(classification) {
+    return classification.map((row) => ({ position: row.position, name: row.name, isPlayer: row.isPlayer }));
 }
 
 /**

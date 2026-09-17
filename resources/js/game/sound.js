@@ -77,6 +77,26 @@ const MUTE_KEY = 'padok-game-muted';
 const VOLUME_KEY = 'padok-game-volume';
 
 /** Предпочитанията за звука надживяват инстанцията (quit → нова обиколка). */
+/**
+ * iOS Safari пуска Web Audio в сесия „ambient", която бутонът за тих режим
+ * заглушава — затова звукът идваше само при включен звънец. „playback"
+ * (Audio Session API, Safari 16.4+) свири и в тих режим, но спира музиката на
+ * други приложения, така че се иска само докато звукът в играта е пуснат.
+ * Другаде API-то липсва и това е no-op.
+ *
+ * @param {'playback'|'auto'} type
+ */
+function requestAudioSession(type) {
+    try {
+        const session = typeof navigator !== 'undefined' ? navigator.audioSession : undefined;
+        if (session && session.type !== type) {
+            session.type = type;
+        }
+    } catch {
+        // Отказ/стара имплементация — остава поведението по подразбиране.
+    }
+}
+
 function readMuted() {
     try {
         return localStorage.getItem(MUTE_KEY) === '1';
@@ -256,6 +276,7 @@ export function createEngineSound(options = {}) {
     // stop() и за излизането от ТВ картина, започнала при спрян двигател.
     const stopSound = () => {
         stopped = true;
+        requestAudioSession('auto');
         if (!ctx || !nodes) {
             return;
         }
@@ -919,6 +940,10 @@ export function createEngineSound(options = {}) {
 
     return {
         start() {
+            // Преди build/resume: типът на сесията важи за звука, пуснат след него.
+            if (!muted) {
+                requestAudioSession('playback');
+            }
             if (!ctx) {
                 try {
                     build();
@@ -946,6 +971,7 @@ export function createEngineSound(options = {}) {
 
         setMuted(value) {
             muted = value;
+            requestAudioSession(value || stopped ? 'auto' : 'playback');
             writeMuted(value);
             // Спряно състояние остава тихо и при unmute — предпочитанието е
             // записано, силата идва при следващия start().

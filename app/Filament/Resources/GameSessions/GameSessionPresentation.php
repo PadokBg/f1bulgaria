@@ -36,7 +36,7 @@ class GameSessionPresentation
         'page_hidden' => 'Страницата е скрита',
         'page_left' => 'Напускане на страницата',
         'error' => 'Техническа грешка',
-        'lap_submitted' => 'Обиколка изпратена за класацията',
+        'lap_submitted' => 'Резултат изпратен за класацията',
         'lap_save_failed' => 'Неуспешен запис за класацията',
     ];
 

@@ -4,13 +4,21 @@
  * The public API deliberately stays small. Racecraft state is kept per Simulation
  * in a WeakMap, so callers may keep passing short-lived option objects (the ghost
  * builder does this) without losing an overtake or defence halfway through it.
+ *
+ * Speed comes from a per-track plan derived from the car model in physics.js
+ * (grip + downforce, banking, crests, steering lock, real braking), not from
+ * hand-tuned caps — a bot must be able to race a human, not idle ahead of one.
+ * Everything uses + − × / √ only, so the plan is identical in every JS engine.
  */
+
+import { CAR } from './physics.js';
 
 const EMPTY_OPTIONS = Object.freeze({});
 const TRACK_PLANS = new WeakMap();
 const DRIVER_STATES = new WeakMap();
 
 const TWO_PI = Math.PI * 2;
+const GRAVITY = 9.81;
 const PASS_OFFSET = 2.55;
 const DEFEND_OFFSET = 1.35;
 const AVOID_OFFSET = 3.05;
@@ -18,8 +26,35 @@ const PASS_MAX_TICKS = 7 * 120;
 const DEFEND_MAX_TICKS = 3 * 120;
 const MANEUVER_RATE = 3.8 / 120;
 const RETURN_RATE = 2.0 / 120;
-const BRAKE_DECEL = 19;
-const TRAFFIC_DECEL = 18;
+const TRAFFIC_DECEL = 26;
+/** Stuck this long close behind a car, a driver attacks without a speed edge. */
+const PRESSURE_TICKS = Math.round(1.5 * 120);
+const PRESSURE_GAP = 22;
+/** Alongside a rival mid-pass a driver takes a little more risk (pace ×). */
+const ATTACK_PACE = 1.03;
+
+/**
+ * Speed planner budget at pace 1. Exported (mutable) only so the offline tuner
+ * (scripts/game/bot-tune.mjs) can search it; the game never changes it.
+ */
+export const PLANNER = {
+    /** Share of the tyre's lateral grip a corner is planned for. */
+    lateralUse: 0.98,
+    /** Share of the real braking deceleration the braking zones assume. */
+    brakeUse: 0.97,
+    /** Required front-wheel angle × this must fit the speed-limited steering lock. */
+    steerMargin: 1.2,
+    /** Seconds ahead the controller already obeys the plan (pedal ramps + reaction). */
+    reactionTime: 0.22,
+    /** Above this share of lateral grip in use, the throttle stays shut (exit traction). */
+    exitLateralUse: 0.82,
+    /** Floor for any planned speed, m/s. */
+    minSpeed: 4.5,
+    /** Pursuit look-ahead per m/s of speed (≈ seconds ahead on the line). */
+    lookAheadTime: 0.55,
+    /** Steering damping on yaw rate — stops the weave at high speed. */
+    yawDamping: 0.12,
+};
 
 /**
  * Calculate one fixed-tick input. Mutates and returns `input`.
@@ -27,7 +62,8 @@ const TRAFFIC_DECEL = 18;
  * @param {import('./sim.js').Simulation} sim
  * @param {{steer: number, throttle: number, brake: number}} input
  * @param {{pace?: number, steerGain?: number, lookBias?: number,
- *          lineOffset?: number, others?: Array<import('./sim.js').Simulation>}} [opts]
+ *          lineOffset?: number, mistakeFactor?: number,
+ *          others?: Array<import('./sim.js').Simulation>}} [opts]
  * @returns {{steer: number, throttle: number, brake: number}}
  */
 export function driveAutopilot(sim, input, opts = EMPTY_OPTIONS) {
@@ -41,7 +77,6 @@ export function driveAutopilot(sim, input, opts = EMPTY_OPTIONS) {
     const state = sim.state;
     const hint = normalizeIndex(sim.trackIndexHint ?? 0, track.count);
     const driver = driverStateFor(sim);
-    const plan = trackPlanFor(track);
 
     refreshDriverState(driver, sim);
     if (driver.passCooldown > 0) driver.passCooldown--;
@@ -134,6 +169,14 @@ export function driveAutopilot(sim, input, opts = EMPTY_OPTIONS) {
         }
     }
 
+    // Pressure: how long this driver has been glued to the car ahead in the
+    // same lane. Racing drivers do not queue politely forever.
+    if (frontSim && frontGap < PRESSURE_GAP && Math.abs(frontLateral - ownLateral) < 2.3) {
+        driver.followTicks++;
+    } else {
+        driver.followTicks = 0;
+    }
+
     updatePassState(
         driver,
         sim,
@@ -183,7 +226,11 @@ export function driveAutopilot(sim, input, opts = EMPTY_OPTIONS) {
         if (laneFits(track, hint, base + escapeSide * AVOID_OFFSET, 0.15)) {
             maneuverTarget = escapeSide * AVOID_OFFSET;
         } else {
-            emergencyTrafficBrake = sideGap > -2.8;
+            // Only the car behind yields. The old `sideGap > -2.8` braked BOTH
+            // cars of a side-by-side pair in a narrow chicane — each saw the
+            // other in range — and at a standstill they blocked the track for
+            // the rest of the race. An exact tie yields by side.
+            emergencyTrafficBrake = sideGap > 0 || (sideGap === 0 && sideLateral > 0);
         }
     }
 
@@ -198,12 +245,18 @@ export function driveAutopilot(sim, input, opts = EMPTY_OPTIONS) {
     const hereCurvature = Math.abs(track.raceCurv[hint]);
     const lookScale = 1 / (1 + hereCurvature * 6);
     const targetDistance =
-        (10 + lookBias + ownSpeed * 0.4) * lookScale;
+        (10 + lookBias + ownSpeed * PLANNER.lookAheadTime) * lookScale;
     const target = indexAhead(track, hint, Math.max(track.spacing, targetDistance));
 
     const maxOffset = laneLimit(track, target);
+    // A driver's own line only differs on straights; in corners everyone
+    // needs the racing line — an offset apex puts street-circuit cars in the
+    // wall. And only towards the middle: the racing line already hugs the edge
+    // with the minimum margin, one step further out is grass under braking.
+    const outward = personalOffset * track.raceOffset[target] > 0;
+    const lineFade = outward ? 0 : clamp(1 - Math.abs(track.raceCurv[target]) * 60, 0, 1);
     const offset = clamp(
-        track.raceOffset[target] + personalOffset + driver.maneuverOffset,
+        track.raceOffset[target] + personalOffset * lineFade + driver.maneuverOffset,
         -maxOffset,
         maxOffset
     );
@@ -213,22 +266,34 @@ export function driveAutopilot(sim, input, opts = EMPTY_OPTIONS) {
     const headingError = wrapAngle(desiredHeading - state.heading);
 
     // A small yaw-rate term damps weave when returning from a completed move.
-    input.steer = clamp(headingError * steerGain - state.yawRate * 0.035, -1, 1);
+    input.steer = clamp(headingError * steerGain - state.yawRate * PLANNER.yawDamping, -1, 1);
 
-    const linePenalty = 1 - Math.min(0.11, Math.abs(driver.maneuverOffset) * 0.035);
-    let safeSpeed = brakingEnvelopeSpeed(
-        track,
-        plan,
-        hint,
-        ownSpeed,
-        pace,
-        linePenalty
-    );
+    // The plan is already a braking envelope: obeying it a reaction time
+    // ahead leaves room for the pedal ramps to reach full brake.
+    const attacking = driver.passTarget !== null && Math.abs(passGap) < 12;
+    // mistakeFactor (race.js): a late-braking error plans this corner too fast.
+    const planPace = (attacking ? Math.min(1, pace * ATTACK_PACE) : pace) * (opts.mistakeFactor ?? 1);
+    const speedPlan = speedPlanFor(track, planPace);
+    let safeSpeed = Infinity;
+    const reactionDistance = ownSpeed * PLANNER.reactionTime + track.spacing;
+    for (let distance = 0; distance <= reactionDistance; distance += track.spacing) {
+        const planned = speedPlan[indexAhead(track, hint, distance)];
+        if (planned < safeSpeed) safeSpeed = planned;
+    }
+
+    // Off the racing line (passing, defending) a corner is slower. Straights
+    // are not: the penalty only bites where the plan is below top speed.
+    const linePenalty = 1 - Math.min(0.05, Math.abs(driver.maneuverOffset) * 0.015);
+    if (safeSpeed < CAR.maxSpeed - 1) {
+        safeSpeed *= linePenalty;
+    }
 
     // Keep a real stopping envelope behind a car until there is enough actual
     // lateral separation to call the overtake established.
     if (frontSim && Math.abs(frontLateral - ownLateral) < 2.3) {
-        const standOff = 5.3 + Math.max(0, ownSpeed - frontSpeed) * 0.08;
+        // A time gap, not a fixed distance: at speed (and in the tow) the car
+        // ahead brakes harder than a 5 m cushion absorbs.
+        const standOff = 5.3 + ownSpeed * 0.1 + Math.max(0, ownSpeed - frontSpeed) * 0.12;
         const usableGap = Math.max(0, frontGap - standOff);
         const followSpeed = Math.sqrt(
             Math.max(0, frontSpeed * frontSpeed + 2 * TRAFFIC_DECEL * usableGap)
@@ -248,10 +313,21 @@ export function driveAutopilot(sim, input, opts = EMPTY_OPTIONS) {
     }
 
     const overspeed = ownSpeed - safeSpeed;
-    const brakeMargin = Math.max(1.8, safeSpeed * 0.045);
+    const brakeMargin = Math.max(1.2, safeSpeed * 0.025);
     input.brake = overspeed > brakeMargin || emergencyTrafficBrake ? 1 : 0;
+
+    // Friction circle: full throttle mid-corner takes the rear's lateral grip
+    // and spins the car, so power waits until the corner opens up.
+    const lateralUse =
+        (ownSpeed * ownSpeed * Math.abs(track.raceCurv[hint])) /
+        (CAR.baseGrip + CAR.downforceCoef * ownSpeed * ownSpeed);
     input.throttle =
-        !input.brake && ownSpeed < safeSpeed - 0.8 && !sim.recovering ? 1 : 0;
+        !input.brake &&
+        ownSpeed < safeSpeed - 0.5 &&
+        lateralUse < PLANNER.exitLateralUse &&
+        !sim.recovering
+            ? 1
+            : 0;
 
     driver.lastTick = Number.isFinite(sim._simTick) ? sim._simTick : driver.lastTick + 1;
     driver.lastX = state.x;
@@ -303,11 +379,14 @@ function updatePassState(
     }
 
     const closingSpeed = ownSpeed - frontSpeed;
-    if (closingSpeed <= 0.8 || ownSpeed < 7) return;
+    const pressured = driver.followTicks > PRESSURE_TICKS && closingSpeed > -1.5;
+    if ((closingSpeed <= 0.8 && !pressured) || ownSpeed < 7) return;
 
     const catchDistance =
         (ownSpeed * ownSpeed - frontSpeed * frontSpeed) / (2 * TRAFFIC_DECEL) + 7;
-    const triggerDistance = clamp(catchDistance, 13, 39);
+    // Pull out late: leaving the slipstream at 39 m (the old trigger) meant the
+    // attacker lost the tow long before reaching the car ahead.
+    const triggerDistance = pressured ? PRESSURE_GAP : clamp(catchDistance, 10, 24);
     if (frontGap > triggerDistance) return;
 
     // Do not initiate a lane change at the apex. An already active move is held.
@@ -456,36 +535,24 @@ function choosePassSide(sim, opts, leader, leaderLateral, ownLateral, hint) {
 }
 
 /**
- * Dynamic braking envelope: for every relevant point ahead, calculate the
- * maximum speed from which the car can still reach that point's corner limit.
+ * Забравя тактическото състояние на пилота (изпреварване/защита/охлаждане).
+ * Решетката на ново състезание го вика изрично: сървърното повторение тръгва
+ * с чист пилот и клиентът трябва да тръгне от СЪЩОТО, а не да разчита, че
+ * refreshDriverState ще усети рестарта.
+ *
+ * @param {import('./sim.js').Simulation} sim
  */
-function brakingEnvelopeSpeed(track, plan, hint, speed, pace, linePenalty) {
-    const cruiseSpeed = Math.max(4.5, 76 * pace);
-    let allowedSq = cruiseSpeed * cruiseSpeed;
-    const lookDistance = clamp(105 + speed * 1.65, 115, 220);
-    const reactionDistance = 3 + speed * 0.12;
-
-    for (let distance = 0; distance <= lookDistance; distance += track.spacing) {
-        const index = indexAhead(track, hint, distance);
-        let cornerSpeed = plan.cornerSpeeds[index] * pace;
-        if (Math.abs(track.raceCurv[index]) > 0.008) {
-            cornerSpeed *= linePenalty;
-        }
-
-        const brakingDistance = Math.max(0, distance - reactionDistance);
-        const candidateSq =
-            cornerSpeed * cornerSpeed + 2 * BRAKE_DECEL * brakingDistance;
-        if (candidateSq < allowedSq) allowedSq = candidateSq;
-    }
-
-    return Math.sqrt(Math.max(0, allowedSq));
+export function resetAutopilotDriver(sim) {
+    DRIVER_STATES.delete(sim);
 }
 
 function trackPlanFor(track) {
     let plan = TRACK_PLANS.get(track);
     if (plan) return plan;
 
-    const cornerSpeeds = new Float32Array(track.count);
+    // Peak racing-line curvature in a ±2 sample window: the sampled line
+    // under-reads a hairpin's apex by a sample or two.
+    const peakCurvature = new Float32Array(track.count);
     for (let i = 0; i < track.count; i++) {
         let peak = 0;
         for (let n = -2; n <= 2; n++) {
@@ -494,21 +561,102 @@ function trackPlanFor(track) {
                 Math.abs(track.raceCurv[normalizeIndex(i + n, track.count)])
             );
         }
-        cornerSpeeds[i] = cornerSpeedForCurvature(peak);
+        peakCurvature[i] = peak;
     }
 
-    plan = { cornerSpeeds };
+    plan = { peakCurvature, speeds: new Map() };
     TRACK_PLANS.set(track, plan);
     return plan;
 }
 
-function cornerSpeedForCurvature(curvature) {
-    const peak = Math.max(curvature, 1e-4);
-    const needAngle = Math.atan(3.6 * peak * 1.2);
-    const geometryLimit = Math.max(4, (0.58 / needAngle - 1) / 0.075);
+/**
+ * Target speed for every track sample at a given pace: the corner limit of
+ * the car model, then a backward braking pass so every sample is reachable
+ * from the next one under braking. Cached per track and pace.
+ *
+ * @param {import('./track.js').Track} track
+ * @param {number} pace Scales the grip budget (1 = PLANNER as tuned)
+ * @returns {Float32Array}
+ */
+export function speedPlanFor(track, pace) {
+    const plan = trackPlanFor(track);
+    const key = Math.round(pace * 10000);
+    const cached = plan.speeds.get(key);
+    if (cached) return cached;
+
+    const count = track.count;
+    const lateralUse = PLANNER.lateralUse * pace;
+    const brakeUse = PLANNER.brakeUse * pace;
+    const speeds = new Float64Array(count);
+
+    for (let i = 0; i < count; i++) {
+        speeds[i] = cornerLimit(track, i, plan.peakCurvature[i], lateralUse, pace);
+    }
+
+    // Two laps backwards so the braking zone before the start line settles too.
+    for (let pass = 0; pass < 2; pass++) {
+        for (let i = count - 1; i >= 0; i--) {
+            const next = speeds[(i + 1) % count];
+            const reachable = Math.sqrt(
+                next * next + 2 * brakingDecel(next, brakeUse, track.gradient[i]) * track.spacing
+            );
+            if (reachable < speeds[i]) speeds[i] = reachable;
+        }
+    }
+
+    const result = Float32Array.from(speeds);
+    plan.speeds.set(key, result);
+    return result;
+}
+
+/**
+ * Highest steady speed through sample i: v²·κ must fit the lateral grip
+ * (base + downforce, banking, crest/compression load) and the front wheels
+ * must still reach the angle the corner needs at that speed.
+ */
+function cornerLimit(track, index, curvature, lateralUse, pace) {
+    if (curvature < 1e-4) {
+        return CAR.maxSpeed;
+    }
+
+    const bankGrip = 1 + Math.min(0.35, Math.abs(track.bankSlope[index]) * 1.1);
+    const rawVertical = track.vertCurv[index];
+    // Same dead zone and load clamps as sim.js.
+    const vertical = Math.abs(rawVertical) < 0.0012 ? 0 : rawVertical;
+
+    // Load depends on speed on a crest, so settle the fixed point in a fixed
+    // number of steps (deterministic, converges in 2–3).
+    let speed = CAR.maxSpeed;
+    for (let iteration = 0; iteration < 4; iteration++) {
+        const load = clamp(1 + (speed * speed * vertical) / GRAVITY, 0.25, 1.8);
+        const grip = lateralUse * bankGrip * load;
+        const denominator = curvature - grip * CAR.downforceCoef;
+        speed = denominator <= 0
+            ? CAR.maxSpeed
+            : Math.min(CAR.maxSpeed, Math.sqrt((grip * CAR.baseGrip) / denominator));
+    }
+
+    // Steering lock shrinks with speed: maxSteerAngle / (1 + v·falloff).
+    const steerLimit =
+        ((CAR.maxSteerAngle * pace) / (PLANNER.steerMargin * CAR.wheelbase * curvature) - 1) /
+        CAR.steerSpeedFalloff;
+
+    return Math.max(PLANNER.minSpeed, Math.min(speed, steerLimit));
+}
+
+/** Deceleration available at speed v with the brake pedal down, m/s². */
+function brakingDecel(speed, brakeUse, gradient) {
+    const grip = CAR.baseGrip + CAR.downforceCoef * speed * speed;
+    const brakes = Math.min(CAR.brakePower, CAR.brakeGripShare * grip) * brakeUse;
+    const slope = (GRAVITY * gradient) / Math.sqrt(1 + gradient * gradient);
+
     return Math.max(
-        4.5,
-        Math.min(76, Math.sqrt(18 / peak), geometryLimit)
+        1,
+        brakes +
+            CAR.drag * speed * speed +
+            CAR.rollingResistance * speed +
+            CAR.engineBraking * Math.min(1, speed / CAR.engineBrakingSpeed) +
+            slope
     );
 }
 
@@ -521,6 +669,7 @@ function driverStateFor(sim) {
         passSide: 0,
         passTicks: 0,
         passCooldown: 0,
+        followTicks: 0,
         defendTarget: null,
         defendSide: 0,
         defendTicks: 0,
@@ -544,6 +693,7 @@ function refreshDriverState(driver, sim) {
         driver.maneuverOffset = 0;
         driver.passCooldown = 0;
         driver.defendCooldown = 0;
+        driver.followTicks = 0;
     }
 }
 

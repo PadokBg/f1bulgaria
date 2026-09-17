@@ -139,9 +139,19 @@ Route::middleware('feature:game')->group(function () {
         ->where('user', '[0-9]{1,10}')
         ->middleware('throttle:60,1,game-ghost')
         ->name('game.ghost');
+    Route::get('/game/race-ghost/{track}/{user}', [GameLeaderboardController::class, 'raceGhost'])
+        ->where('user', '[0-9]{1,10}')
+        ->middleware('throttle:60,1,game-race-ghost')
+        ->name('game.race-ghost');
     Route::post('/game/lap', [GameLeaderboardController::class, 'store'])
         ->middleware(['auth', 'throttle:30,1,game-lap'])
         ->name('game.lap.store');
+    // Състезание трае поне няколко минути, а всяко преиграване е ~1–2 s CPU
+    // на опашката за цялото поле — затова лимитът е тесен: 3 на минута
+    // покриват повторен опит, но не и наводняване на worker-а.
+    Route::post('/game/race', [GameLeaderboardController::class, 'storeRace'])
+        ->middleware(['auth', 'throttle:3,1,game-race'])
+        ->name('game.race.store');
     // „Карай" на регистриран потребител — следата „пробвал е играта" за
     // админа (Играчи). Без вход не записваме нищо: гостът няма акаунт.
     Route::post('/game/session', [GameSessionController::class, 'store'])

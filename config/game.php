@@ -26,6 +26,17 @@ return [
     // eligible for leaderboards, profiles, badges and server ghosts.
     'sim_version' => 3,
 
+    // Mirrors RACE_VERSION in resources/js/game/race.js (grid, bots, contacts,
+    // penalties, finish). Bumping it starts a fresh race leaderboard.
+    'race_version' => 1,
+
+    // Mirrors RACE_OPPONENTS / RACE_PENALTY_MS in race.js.
+    'race' => [
+        'opponents' => 5,
+        'total_laps' => 3,
+        'penalty_ms' => 5000,
+    ],
+
     /*
     |----------------------------------------------------------------------
     | Писти

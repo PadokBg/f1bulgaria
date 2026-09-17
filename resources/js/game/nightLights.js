@@ -13,7 +13,7 @@
  *     в ключа на всяка lit програма и добавяне/махане на светлина по време на
  *     игра би прекомпилирало всеки MeshStandardMaterial в сцената;
  *   - fill directional срещу главната (прожекторите светят отвсякъде — колата
- *     не бива да е наполовина черна), с главната свалена на 75 %;
+ *     не бива да е наполовина черна), с главната свалена на 70 %;
  *   - светкавици от трибуните (Points, hash по време) — на десктоп bloom-ват,
  *     на телефон четат като бели точки;
  *   - лампи в питлейна пред гаражите и под тавана на тунела (Монако) — същите
@@ -43,19 +43,23 @@ const DEFAULTS = Object.freeze({
     spotIntensity: 440,
     spotDistance: 82,
     spotAngle: 0.55,
-    spotPenumbra: 0.6,
+    spotPenumbra: 0.72,
     spotDecay: 1.5,
-    spotColor: 0xe8f0ff,
+    spotColor: 0xf1f3f5,
     /** Секунди за плавно вдигане/сваляне на преназначен прожектор (без pop). */
     spotFade: 0.3,
     /** Колко метра ЗАД колата глава остава кандидат (басейнът ѝ е ±15 m). */
     behindMetres: 20,
     aheadMetres: 600,
     /** Сила на fill-а спрямо главната светлина и колко се сваля главната. */
-    fillRatio: 0.24,
+    fillRatio: 0.36,
     sunScale: 0.7,
-    fillColor: 0xbfcfff,
-    coneOpacity: 0.045,
+    fillColor: 0xe4e7e9,
+    // Retain the authored circuit tint, with a neutral stadium-light core.
+    // This keeps blue light from swallowing the red paint and dark carbon.
+    keyTint: 0xf5f1e8,
+    keyTintMix: 0.42,
+    coneOpacity: 0.027,
     /** Визуалният конус е по-тесен от реалния spot: ярката сърцевина. */
     coneHalfAngle: 0.32,
     flashCount: 300,
@@ -66,7 +70,7 @@ const DEFAULTS = Object.freeze({
 
 /** Външност на трите вида лампи (HDR цветове > 1 — bloom-ът ги вижда). */
 const KINDS = Object.freeze({
-    flood: { halo: 5.2, color: [1.55, 1.62, 1.75], penalty: 0, intensity: 1, distance: 1, angle: 1 },
+    flood: { halo: 4.1, color: [1.48, 1.5, 1.52], penalty: 0, intensity: 1, distance: 1, angle: 1 },
     pit: { halo: 1.9, color: [1.7, 1.5, 1.18], penalty: 60, intensity: 0.25, distance: 0.45, angle: 1.35 },
     tunnel: { halo: 1.35, color: [1.8, 1.32, 0.82], penalty: 0, intensity: 0.12, distance: 0.22, angle: 1.55 },
 });
@@ -223,7 +227,7 @@ const FLASH_FRAGMENT = /* glsl */ `
  *     {x, y (земя), z, rotationY, depth, height, span, slope?} | THREE.Box3 |
  *     {min, max}. Липсва → стартовата трибуна + OSM контурите
  * @property {THREE.DirectionalLight|null} [sun]  Главната светлина: сваля се
- *     на sunScale, за да е сборната енергия равна с fill-а; връща се при dispose
+ *     на sunScale и омекотява синия оттенък; двете се връщат при dispose
  * @property {THREE.Vector3|null} [sunDir]  Единичен вектор КЪМ слънцето (за
  *     огледалния fill); липсва → от sun.position
  * @property {number} [spotCount]        Пул прожектори (по подразбиране 4 / 2)
@@ -338,7 +342,7 @@ export function createNightLights(scene, track, circuit, towers, options = {}) {
 
     let flashes = null;
     let fill = null;
-    const restoreSun = { light: null, intensity: 0 };
+    const restoreSun = { light: null, intensity: 0, color: null };
     if (night) {
         const boxes = normalizeGrandstands(options.grandstands ?? null, track, circuit, options.pitRange ?? null);
         const flashCount = options.flashCount ?? look.flashCount ?? (lowPower ? cfg.flashCountLowPower : cfg.flashCount);
@@ -348,7 +352,7 @@ export function createNightLights(scene, track, circuit, towers, options = {}) {
         }
 
         // Fill срещу главната: огледална по хоризонталата, същата елевация.
-        // Главната пада на 75 % → сборно ≈ 1.1× (басейните са отгоре).
+        // Главната пада на 70 % → сборно ≈ 1.06× (басейните са отгоре).
         const sun = options.sun ?? null;
         const sunDir = options.sunDir ?? (sun ? sun.position.clone().sub(sun.target.position).normalize() : null);
         const baseIntensity = sun?.intensity ?? circuit.atmosphere?.sunIntensity ?? 2.3;
@@ -365,7 +369,9 @@ export function createNightLights(scene, track, circuit, towers, options = {}) {
         if (sun) {
             restoreSun.light = sun;
             restoreSun.intensity = sun.intensity;
+            restoreSun.color = sun.color.clone();
             sun.intensity = sun.intensity * cfg.sunScale;
+            sun.color.lerp(new THREE.Color(cfg.keyTint), cfg.keyTintMix);
         }
     }
 
@@ -470,6 +476,7 @@ export function createNightLights(scene, track, circuit, towers, options = {}) {
         }
         if (restoreSun.light) {
             restoreSun.light.intensity = restoreSun.intensity;
+            restoreSun.light.color.copy(restoreSun.color);
         }
         for (const entry of emissives) {
             entry.material.emissiveMap = entry.emissiveMap;

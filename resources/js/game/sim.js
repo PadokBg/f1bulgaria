@@ -225,12 +225,7 @@ class Simulation {
      *          frames: Float32Array|null}}
      */
     tick(rawInput) {
-        // Квантуване: волан на 1/127 (аналоговият tilt), газ/спирачка на бит.
-        const input = this._input;
-        const steer = Math.max(-1, Math.min(1, rawInput.steer));
-        input.steer = Math.round(steer * 127) / 127;
-        input.throttle = rawInput.throttle > 0.5 ? 1 : 0;
-        input.brake = rawInput.brake > 0.5 ? 1 : 0;
+        const input = quantizeInput(rawInput, this._input);
         this._simTick++;
 
         // wallHit е презентационен изход: задържа се четири физични тика, за
@@ -253,10 +248,7 @@ class Simulation {
                 this.recFrames = [];
                 this.recStart = null;
             } else {
-                this.recInputs.push(
-                    Math.round(input.steer * 127) + 128,
-                    (input.throttle ? 1 : 0) | (input.brake ? 2 : 0)
-                );
+                pushTraceInput(this.recInputs, input);
             }
         }
 
@@ -321,6 +313,12 @@ class Simulation {
             this.#rememberSafeState(projection.index);
         } else {
             this.offTrackTicks++;
+
+            // Броят на излизанията — наказанията в състезание (race.js). По
+            // ръб: едно излизане = едно наказание, колкото и да трае.
+            if (this.offTrackTicks === OFFTRACK_GRACE + 1) {
+                this.excursions++;
+            }
 
             // Реални track limits: излизането НЕ прекъсва карането — времето
             // си тече, но летящата обиколка става невалидна (иначе срязването
@@ -510,6 +508,9 @@ class Simulation {
         this.offTrackTicks = 0;
         this.cutCooldown = 0;
         this.warnings = 0;
+        // Излизания от reset насам — за разлика от warnings не се нулират
+        // между обиколките, защото наказанието в състезание е за цялата дистанция.
+        this.excursions = 0;
         this.timerGated = false;
         this.gateDistance = 0;
         this.safeState = this.#safeStateAt(0, 0);
@@ -908,6 +909,33 @@ export function decodeFrames(encoded) {
 }
 
 /**
+ * Квантува суровия вход така, както симулацията го изиграва: волан на 1/127
+ * (аналоговият tilt), газ/спирачка на бит. Записът и повторението минават
+ * през СЪЩАТА функция — иначе записаното не е точно изиграното.
+ *
+ * @param {{steer: number, throttle: number, brake: number}} rawInput
+ * @param {{steer: number, throttle: number, brake: number}} out
+ */
+export function quantizeInput(rawInput, out) {
+    const steer = Math.max(-1, Math.min(1, rawInput.steer));
+    out.steer = Math.round(steer * 127) / 127;
+    out.throttle = rawInput.throttle > 0.5 ? 1 : 0;
+    out.brake = rawInput.brake > 0.5 ? 1 : 0;
+
+    return out;
+}
+
+/**
+ * Добавя вече квантуван вход като 2 байта: волан (Int8+128) + флагове.
+ *
+ * @param {number[]} target
+ * @param {{steer: number, throttle: number, brake: number}} input
+ */
+export function pushTraceInput(target, input) {
+    target.push(Math.round(input.steer * 127) + 128, (input.throttle ? 1 : 0) | (input.brake ? 2 : 0));
+}
+
+/**
  * Разопакова записан вход обратно в {steer, throttle, brake} за tick().
  *
  * @param {Uint8Array} inputs
@@ -926,7 +954,7 @@ export function readTraceInput(inputs, tickIndex, out) {
 }
 
 /** btoa/Buffer — каквото има в средата (браузър или Node). */
-function bytesToBase64(bytes) {
+export function bytesToBase64(bytes) {
     if (typeof Buffer !== 'undefined') {
         return Buffer.from(bytes).toString('base64');
     }
@@ -937,7 +965,7 @@ function bytesToBase64(bytes) {
     return btoa(binary);
 }
 
-function base64ToBytes(encoded) {
+export function base64ToBytes(encoded) {
     if (typeof Buffer !== 'undefined') {
         return new Uint8Array(Buffer.from(encoded, 'base64'));
     }

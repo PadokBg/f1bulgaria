@@ -6,6 +6,7 @@ namespace App\Jobs;
 
 use App\Models\GameLapRecord;
 use App\Services\Badges\BadgeService;
+use App\Services\Game\NodeReplayRunner;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -14,7 +15,6 @@ use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Symfony\Component\Process\Process;
 
 /**
  * Преиграва записан вход през СЪЩАТА симулация като клиента (Node,
@@ -62,7 +62,7 @@ class ValidateGameLapJob implements ShouldQueue
         ];
     }
 
-    public function handle(): void
+    public function handle(NodeReplayRunner $runner): void
     {
         $record = GameLapRecord::query()->find($this->recordId);
 
@@ -87,44 +87,15 @@ class ValidateGameLapJob implements ShouldQueue
             return;
         }
 
-        $payloadPath = tempnam(sys_get_temp_dir(), 'padok-lap-');
+        $result = $runner->run('scripts/game/validate-lap.mjs', [
+            'trackFile' => $trackFile,
+            'trace' => $record->input_trace,
+        ], $record->id);
 
-        try {
-            file_put_contents($payloadPath, json_encode([
-                'trackFile' => $trackFile,
-                'trace' => $record->input_trace,
-            ], JSON_THROW_ON_ERROR));
-
-            $process = new Process([
-                (string) config('game.validator.node', 'node'),
-                base_path('scripts/game/validate-lap.mjs'),
-                $payloadPath,
-            ], base_path(), timeout: 90);
-
-            $process->run();
-
-            if (! $process->isSuccessful()) {
-                Log::warning('game: валидаторът на обиколки не тръгна', [
-                    'record' => $record->id,
-                    'exit' => $process->getExitCode(),
-                    'stderr' => mb_substr($process->getErrorOutput(), 0, 500),
-                ]);
-                $record->update(['verify_status' => 'error']);
-
-                return;
-            }
-
-            $result = json_decode(trim($process->getOutput()), true, 512, JSON_THROW_ON_ERROR);
-        } catch (\Throwable $e) {
-            Log::warning('game: валидацията на обиколка гръмна', [
-                'record' => $record->id,
-                'error' => $e->getMessage(),
-            ]);
+        if ($result === null) {
             $record->update(['verify_status' => 'error']);
 
             return;
-        } finally {
-            @unlink($payloadPath);
         }
 
         $status = (string) ($result['status'] ?? 'bad_trace');

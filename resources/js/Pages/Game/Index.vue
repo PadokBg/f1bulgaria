@@ -185,6 +185,9 @@ const RIVAL_COUNT = 5;
 // Дублира Game.RACE_TOTAL_LAPS само докато класът не е зареден (pre-start
 // текстът се показва преди setOpponents да го изпрати през телеметрията).
 const RACE_TOTAL_LAPS_FALLBACK = 3;
+// Дублира race.js RACE_PENALTY_MS / 1000 — race.js не се внася тук, за да не
+// влачи симулацията в чънка на страницата (GameRaceLeaderboardTest ги пази в синхрон).
+const RACE_PENALTY_SECONDS = 5;
 // Мобилно управление: четири ясни бутона по подразбиране. Накланянето остава
 // опция само за волана; газта и спирачката винаги са под десния палец.
 const controlMode = ref('buttons'); // 'tilt' | 'buttons'
@@ -443,11 +446,13 @@ onMounted(() => {
     const params = new URLSearchParams(window.location.search);
     const trackParam = params.get('track');
     const rivalParam = params.get('rival');
+    const raceRivalParam = params.get('raceRival');
     if (trackParam) {
         const track = props.tracks.find((t) => t.slug === trackParam);
         if (track) {
             const rivalId = rivalParam && /^\d+$/.test(rivalParam) ? Number(rivalParam) : null;
-            startGame(track, rivalId);
+            const raceRivalId = raceRivalParam && /^\d+$/.test(raceRivalParam) ? Number(raceRivalParam) : null;
+            startGame(track, rivalId, raceRivalId);
         }
     }
 });
@@ -460,6 +465,10 @@ const emptyTelemetry = () => ({
     fieldSize: 1,
     raceLap: 0,
     raceTotalLaps: 0,
+    racePenalties: 0,
+    draft: 0,
+    drs: null,
+    radar: null,
     tower: null,
     ghostDelta: null,
     mapDots: [],
@@ -704,10 +713,11 @@ const towerGap = (row, idx) => {
     if (idx === 0) {
         return 'Лидер';
     }
-    if (typeof row.gapS === 'number') {
-        return formatGap(row.gapS);
+    if (row.lapped > 0) {
+        return `+${row.lapped} обик.`;
     }
-    return typeof row.gap === 'number' ? `+${row.gap} м` : '';
+    // Точките за хронометраж (race.js) са през 20 m — десетите са честната точност.
+    return typeof row.gapS === 'number' ? `+${row.gapS.toFixed(1)}` : '';
 };
 const towerArrow = (row) => (row.delta > 0 ? '▲' : row.delta < 0 ? '▼' : '');
 
@@ -987,7 +997,8 @@ const newLap = () => {
 // Ново състезание от подиума: решетка + светлини отначало.
 const newRace = () => {
     replaying.value = false;
-    raceResult.value = null;
+    clearRaceResult();
+    raceMessages.value = [];
     game.value?.reset(true);
 };
 
@@ -1163,8 +1174,91 @@ const seekReplay = (fraction) => {
 // ── Стартова процедура (състезание): брой светнали лампи, null = няма ─────
 const launchLights = ref(null);
 
-// ── Финал на състезанието: {position, standings} от Game.onRaceFinish ─────
+// ── Финал на състезанието: {position, standings, totalMs…} от Game.onRaceFinish ─
 const raceResult = ref(null);
+// Записът в класацията „Състезание": отговорът на сървъра и статусът.
+const raceMeta = ref(null); // { total_ms, personal_best, rank, user_best_ms, top }
+const raceSubmitting = ref(false);
+const raceSubmitError = ref(null);
+const raceHasTrace = ref(false);
+let raceSubmitRun = 0;
+
+// Задочна битка: {name, totalMs} на съперника от класацията „Състезание".
+const raceRivalInfo = ref(null);
+
+// Радиото: последните съобщения от Game.onRaceMessage, всяко живее кратко.
+const raceMessages = ref([]);
+const RADIO_MESSAGE_MS = 3500;
+let radioKey = 0;
+const pushRaceMessage = (message) => {
+    const key = ++radioKey;
+    raceMessages.value = [...raceMessages.value.slice(-2), { ...message, key }];
+    setTimeout(() => {
+        raceMessages.value = raceMessages.value.filter((item) => item.key !== key);
+    }, RADIO_MESSAGE_MS);
+};
+
+// Време в класирането на подиума: победителят с общо време, останалите с
+// разлика, нефиниширалите с обиколки назад.
+const classificationTime = (row) => {
+    if (!row.finished) {
+        return row.lapsDown > 0 ? `+${row.lapsDown} обик.` : 'на пистата';
+    }
+    if (row.position === 1 || row.gapMs === null) {
+        return formatMs(row.totalMs);
+    }
+    return `+${(row.gapMs / 1000).toFixed(3)}`;
+};
+
+const submitRace = async (outcome, trace) => {
+    if (!selectedTrack.value) {
+        return;
+    }
+
+    // „Ново състезание"/смяна на пистата, докато заявката лети → отговорът
+    // вече не принадлежи на показания подиум.
+    const run = ++raceSubmitRun;
+    const recordedAttempt = sessionTracker.current;
+
+    raceSubmitting.value = true;
+    raceSubmitError.value = null;
+
+    try {
+        const { data } = await window.axios.post('/game/race', {
+            track: selectedTrack.value.slug,
+            race_ms: outcome.raceMs,
+            penalties: outcome.penalties,
+            position: outcome.position,
+            // Записът на входа — сървърът преиграва цялото състезание.
+            trace,
+            sim_version: outcome.simVersion,
+            race_version: outcome.raceVersion,
+        });
+        sessionTracker.record('lap_submitted', { save_status: 'pending' }, recordedAttempt);
+
+        if (run === raceSubmitRun) {
+            raceMeta.value = data;
+        }
+    } catch (e) {
+        sessionTracker.record('lap_save_failed', { save_status: 'failure', error_code: e?.response?.status === 422 ? 'validation_failed' : 'request_failed' }, recordedAttempt);
+        if (run === raceSubmitRun) {
+            raceSubmitError.value = e?.response?.data?.message ?? 'Времето не се записа.';
+        }
+    } finally {
+        if (run === raceSubmitRun) {
+            raceSubmitting.value = false;
+        }
+    }
+};
+
+const clearRaceResult = () => {
+    raceSubmitRun++;
+    raceResult.value = null;
+    raceMeta.value = null;
+    raceSubmitting.value = false;
+    raceSubmitError.value = null;
+    raceHasTrace.value = false;
+};
 
 // ── Дуел: духът на съперник от класацията ─────────────────────────────────
 const rivalInfo = ref(null); // {name, lapMs} — показва се като чип в HUD-а
@@ -1173,12 +1267,23 @@ const rivalInfo = ref(null); // {name, lapMs} — показва се като �
 const expandedBoard = ref(null); // slug на пистата с отворена класация
 const boardRows = ref([]);
 const boardWeekly = ref(null); // седмичната класация (само пистата на уикенда)
-const boardTab = ref('all'); // 'week' | 'all'
+const boardRaceRows = ref([]); // класацията „Състезание" (общо време + наказания)
+const boardTab = ref('all'); // 'week' | 'all' | 'race'
 const boardLoading = ref(false);
 
-const displayedBoardRows = computed(() =>
-    boardTab.value === 'week' && boardWeekly.value !== null ? boardWeekly.value : boardRows.value
-);
+const boardTabs = computed(() => [
+    ...(boardWeekly.value !== null ? [{ v: 'week', l: 'Тази седмица' }] : []),
+    { v: 'all', l: 'Сам на пистата' },
+    { v: 'race', l: 'Състезание' },
+]);
+
+const displayedBoardRows = computed(() => {
+    if (boardTab.value === 'race') {
+        return boardRaceRows.value;
+    }
+
+    return boardTab.value === 'week' && boardWeekly.value !== null ? boardWeekly.value : boardRows.value;
+});
 const copiedChallenge = ref(null); // ключ на реда с копиран линк (за ✓)
 
 const toggleBoard = async (slug) => {
@@ -1189,18 +1294,21 @@ const toggleBoard = async (slug) => {
     expandedBoard.value = slug;
     boardRows.value = [];
     boardWeekly.value = null;
+    boardRaceRows.value = [];
     boardLoading.value = true;
     try {
         const { data } = await window.axios.get(`/game/leaderboard/${slug}`);
         if (expandedBoard.value === slug) {
             boardRows.value = data.top ?? [];
             boardWeekly.value = data.weekly ?? null;
+            boardRaceRows.value = data.race_top ?? [];
             // Пистата на уикенда отваря направо седмичното предизвикателство.
             boardTab.value = data.weekly !== null && data.weekly !== undefined ? 'week' : 'all';
         }
     } catch {
         if (expandedBoard.value === slug) {
             boardRows.value = [];
+            boardRaceRows.value = [];
             // Без weekly данни табът „Тази седмица" от предишна писта би
             // показал седмично празно съобщение на писта без предизвикателство.
             boardTab.value = 'all';
@@ -1423,7 +1531,7 @@ const timerLabel = computed(() => {
  * Three.js се зарежда динамично: ~600 KB, които нямат работа в основния
  * бъндъл на сайта, щом играта е една страница от двайсет.
  */
-const startGame = async (track, rivalUserId = null) => {
+const startGame = async (track, rivalUserId = null, raceRivalUserId = null) => {
     // Клавиатура/бърз двоен тап: едно зареждане наведнъж.
     if (loading.value || selectedTrack.value) {
         return;
@@ -1434,6 +1542,8 @@ const startGame = async (track, rivalUserId = null) => {
     returnTrackSlug = track.slug;
     error.value = null;
     rivalInfo.value = null;
+    raceRivalInfo.value = null;
+    raceMessages.value = [];
 
     try {
         const [{ Game }, response] = await Promise.all([
@@ -1535,9 +1645,32 @@ const startGame = async (track, rivalUserId = null) => {
 
         // Карираният флаг на състезанието → подиумът.
         instance.onRaceFinish = (raceOutcome) => {
-            raceResult.value = raceOutcome;
-            if (raceOutcome) sessionTracker.end('race_completed', { race_position: raceOutcome.position, progress: 1 });
+            if (!raceOutcome) {
+                clearRaceResult();
+                return;
+            }
+
+            clearRaceResult();
+            // Трейсът (стотици KB) не влиза в реактивното състояние.
+            const { trace, ...shown } = raceOutcome;
+            raceResult.value = shown;
+            raceHasTrace.value = trace !== null;
+            sessionTracker.end('race_completed', { race_position: raceOutcome.position, progress: 1 });
+
+            if (trace !== null && authUser.value) {
+                submitRace(raceOutcome, trace);
+            }
         };
+
+        // Полето доизкара след флага → окончателното класиране на подиума.
+        instance.onRaceClassification = (final) => {
+            if (!raceResult.value) {
+                return;
+            }
+            raceResult.value = { ...raceResult.value, ...final, final: true };
+        };
+
+        instance.onRaceMessage = pushRaceMessage;
 
         // Вътрешен reset (R / „Рестарт" по време на реплей) сваля и соло
         // резултатния екран — иначе новата обиколка кара зад стария overlay.
@@ -1558,6 +1691,22 @@ const startGame = async (track, rivalUserId = null) => {
                 })
                 .catch(() => {
                     // Няма дух (изтрит/невалиден) — караш си нормална обиколка.
+                });
+        }
+
+        // Задочна битка в състезание: най-доброто състезание на играч от
+        // класацията кара като полупрозрачна кола (без контакт).
+        if (raceRivalUserId !== null) {
+            rivals.value = 'race';
+            window.axios
+                .get(`/game/race-ghost/${track.slug}/${raceRivalUserId}`)
+                .then(({ data: ghost }) => {
+                    if (game.value === instance && instance.setRaceRival?.(ghost)) {
+                        raceRivalInfo.value = { name: ghost.name, totalMs: ghost.total_ms };
+                    }
+                })
+                .catch(() => {
+                    // Няма дух — караш си нормално състезание.
                 });
         }
 
@@ -1721,8 +1870,10 @@ const quit = () => {
     preStart.value = false;
     replaying.value = false;
     launchLights.value = null;
-    raceResult.value = null;
+    clearRaceResult();
     rivalInfo.value = null;
+    raceRivalInfo.value = null;
+    raceMessages.value = [];
     lowPower.value = false;
     gameApi.value = emptyGameApi();
     trackOutline.value = null;
@@ -2368,13 +2519,11 @@ const recenterTilt = () => {
                     </button>
 
                     <div v-if="expandedBoard === track.slug" :id="`track-board-${track.slug}`" class="border-t border-zinc-800/70 px-5 py-3">
-                        <!-- Пистата на уикенда: седмично предизвикателство + всички времена -->
-                        <div v-if="boardWeekly !== null" class="mb-2 flex gap-1.5">
+                        <!-- Сам на пистата (+ седмичното предизвикателство на
+                             пистата на уикенда) и отделната класация „Състезание" -->
+                        <div class="mb-2 flex flex-wrap gap-1.5">
                             <button
-                                v-for="tab in [
-                                    { v: 'week', l: 'Тази седмица' },
-                                    { v: 'all', l: 'Всички времена' },
-                                ]"
+                                v-for="tab in boardTabs"
                                 :key="tab.v"
                                 type="button"
                                 class="rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider transition"
@@ -2388,11 +2537,21 @@ const recenterTilt = () => {
                             </button>
                         </div>
 
+                        <p v-if="boardTab === 'race'" class="mb-1.5 text-[11px] text-zinc-500">
+                            Общо време за {{ RACE_TOTAL_LAPS_FALLBACK }} обиколки срещу {{ RIVAL_COUNT }} съперници,
+                            +{{ RACE_PENALTY_SECONDS }} s за всяко излизане от пистата.
+                        </p>
                         <div v-if="boardLoading" class="py-2 text-center text-xs text-zinc-500">
                             Зареждане…
                         </div>
                         <div v-else-if="displayedBoardRows.length === 0" class="py-2 text-center text-xs text-zinc-500">
-                            {{ boardTab === 'week' ? 'Никой не е карал тази седмица — бъди първи!' : 'Още няма времена — бъди първи!' }}
+                            {{
+                                boardTab === 'week'
+                                    ? 'Никой не е карал тази седмица — бъди първи!'
+                                    : boardTab === 'race'
+                                        ? 'Още няма завършени състезания — бъди първи!'
+                                        : 'Още няма времена — бъди първи!'
+                            }}
                         </div>
                         <ol v-else class="space-y-1.5">
                             <li
@@ -2410,9 +2569,19 @@ const recenterTilt = () => {
                                     >{{ row.name }}</a>
                                 </span>
                                 <span class="flex shrink-0 items-center gap-1.5">
-                                    <span class="font-display text-xs font-bold tabular-nums">{{ formatMs(row.lap_ms) }}</span>
+                                    <span class="font-display text-xs font-bold tabular-nums">{{ formatMs(row.lap_ms ?? row.total_ms) }}</span>
                                     <button
-                                        v-if="row.has_ghost && !row.is_you"
+                                        v-if="boardTab === 'race' && row.has_ghost && !row.is_you"
+                                        type="button"
+                                        class="rounded bg-fuchsia-500/15 px-2 py-1 text-[11px] font-bold text-fuchsia-300 transition hover:bg-fuchsia-500/30"
+                                        title="Състезание срещу реалното състезание на този играч"
+                                        :aria-label="`Състезание срещу ${row.name}`"
+                                        @click="startGame(track, null, row.user_id)"
+                                    >
+                                        <span aria-hidden="true">⚔️</span> Срещу
+                                    </button>
+                                    <button
+                                        v-if="boardTab !== 'race' && row.has_ghost && !row.is_you"
                                         type="button"
                                         class="rounded bg-fuchsia-500/15 px-2 py-1 text-[11px] font-bold text-fuchsia-300 transition hover:bg-fuchsia-500/30"
                                         title="Дуел срещу духа на тази обиколка"
@@ -2422,7 +2591,7 @@ const recenterTilt = () => {
                                         <span aria-hidden="true">👻</span> Дуел
                                     </button>
                                     <button
-                                        v-if="row.has_ghost"
+                                        v-if="boardTab !== 'race' && row.has_ghost"
                                         type="button"
                                         class="rounded bg-zinc-800 px-2 py-1 text-[11px] font-semibold text-zinc-300 transition hover:bg-zinc-700"
                                         title="Копирай линк-покана към този дуел"
@@ -2613,6 +2782,18 @@ const recenterTilt = () => {
                             >
                                 Невалидна — излизане от пистата
                             </div>
+                            <!-- Състезание: излизанията не анулират, а добавят време -->
+                            <div
+                                v-else-if="telemetry.raceTotalLaps > 0"
+                                class="mt-2 text-[11px] font-semibold uppercase tracking-wider"
+                                :class="telemetry.racePenalties > 0 ? 'text-red-400' : 'text-zinc-500'"
+                            >
+                                <template v-if="telemetry.racePenalties > 0">
+                                    Наказание +{{ telemetry.racePenalties * RACE_PENALTY_SECONDS }} s
+                                    <span class="text-zinc-500">({{ telemetry.racePenalties }} × излизане)</span>
+                                </template>
+                                <template v-else>Без наказания</template>
+                            </div>
                             <div v-else class="mt-2 flex items-center gap-1.5">
                                 <span class="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Излизания</span>
                                 <span
@@ -2656,6 +2837,14 @@ const recenterTilt = () => {
                             👻 Дуел с {{ rivalInfo.name }} · <span class="font-display tabular-nums">{{ formatMs(rivalInfo.lapMs) }}</span>
                         </div>
 
+                        <!-- Задочна битка в състезание: срещу чие реално състезание се кара -->
+                        <div
+                            v-if="raceRivalInfo && telemetry.tower"
+                            class="hud-secondary mt-1.5 inline-flex items-center gap-1.5 rounded bg-fuchsia-500/20 px-2 py-1 text-[11px] font-semibold text-fuchsia-200 backdrop-blur-sm"
+                        >
+                            ⚔️ Срещу {{ raceRivalInfo.name }} · <span class="font-display tabular-nums">{{ formatMs(raceRivalInfo.totalMs) }}</span>
+                        </div>
+
                         <!-- Състезание: позиция + обиколка + кулата с интервалите в секунди -->
                         <div v-if="telemetry.tower" class="mt-2">
                             <div class="flex items-stretch gap-1.5">
@@ -2666,13 +2855,30 @@ const recenterTilt = () => {
                                 <div class="flex items-center rounded-lg bg-black/55 px-2.5 font-display text-sm font-bold tabular-nums text-zinc-200 backdrop-blur-sm">
                                     L {{ Math.min(Math.max(telemetry.raceLap, 1), telemetry.raceTotalLaps) }}/{{ telemetry.raceTotalLaps }}
                                 </div>
+                                <!-- Слипстрийм: теглото зад колата отпред — сигнал „атакувай на правата" -->
+                                <div
+                                    v-if="telemetry.draft > 0.2"
+                                    class="flex items-center rounded-lg bg-sky-500/25 px-2.5 text-[11px] font-bold uppercase tracking-wider text-sky-200 backdrop-blur-sm"
+                                    role="status"
+                                >
+                                    Слипстрийм
+                                </div>
+                                <!-- DRS: рамка = наличен след точката за засичане, плътно = отворен -->
+                                <div
+                                    v-if="telemetry.drs"
+                                    class="flex items-center rounded-lg px-2.5 font-display text-[11px] font-black uppercase tracking-wider backdrop-blur-sm"
+                                    :class="telemetry.drs === 'open' ? 'bg-emerald-500 text-zinc-950' : 'border border-emerald-400/70 text-emerald-300'"
+                                    role="status"
+                                >
+                                    DRS
+                                </div>
                             </div>
                             <div class="instrument-panel race-tower hud-secondary mt-1.5 rounded-lg px-3 py-2 text-[11px] tabular-nums">
                                 <div
                                     v-for="(row, idx) in telemetry.tower"
                                     :key="idx"
                                     class="flex items-baseline justify-between gap-3 py-0.5"
-                                    :class="row.isPlayer ? 'race-tower-player font-bold text-white' : 'text-zinc-300'"
+                                    :class="row.isPlayer ? 'race-tower-player font-bold text-white' : row.isRival ? 'text-fuchsia-300' : 'text-zinc-300'"
                                 >
                                     <span class="flex items-baseline gap-1">
                                         <span class="w-3 text-zinc-500">{{ idx + 1 }}</span>
@@ -2680,13 +2886,44 @@ const recenterTilt = () => {
                                             class="w-2 text-[11px]"
                                             :class="row.delta > 0 ? 'text-emerald-400' : 'text-red-400'"
                                         >{{ towerArrow(row) }}</span>
-                                        {{ row.isPlayer ? 'Ти' : row.name }}
+                                        {{ row.isPlayer ? 'Ти' : row.isRival ? `👻 ${row.name}` : row.name }}
                                     </span>
                                     <span class="font-display" :class="idx === 0 ? 'text-zinc-500' : 'text-zinc-400'">{{ towerGap(row, idx) }}</span>
                                 </div>
                             </div>
                         </div>
                     </div>
+
+                    <!-- Радио от състезанието: наказания, атаки, DRS, смени на позиция -->
+                    <div
+                        v-if="raceMessages.length"
+                        class="pointer-events-none absolute inset-x-0 top-16 z-20 flex flex-col items-center gap-1.5 px-4"
+                        role="status"
+                        aria-live="polite"
+                    >
+                        <div
+                            v-for="message in raceMessages"
+                            :key="message.key"
+                            class="max-w-md rounded-lg border-l-4 bg-black/75 px-3 py-1.5 text-xs font-semibold text-white shadow-lg backdrop-blur-sm sm:text-sm"
+                            :class="message.tone === 'bad' ? 'border-red-500' : message.tone === 'good' ? 'border-emerald-400' : 'border-sky-400'"
+                        >
+                            <span class="mr-1.5 text-[10px] font-bold uppercase tracking-widest text-zinc-400">Радио</span>{{ message.text }}
+                        </div>
+                    </div>
+
+                    <!-- Радар: кола отстрани в борба колело до колело -->
+                    <template v-if="telemetry.radar">
+                        <div
+                            class="pointer-events-none absolute left-2 top-1/2 h-32 w-1.5 -translate-y-1/2 rounded-full bg-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.8)] transition-opacity duration-150 sm:left-4"
+                            :style="{ opacity: telemetry.radar.left }"
+                            aria-hidden="true"
+                        ></div>
+                        <div
+                            class="pointer-events-none absolute right-2 top-1/2 h-32 w-1.5 -translate-y-1/2 rounded-full bg-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.8)] transition-opacity duration-150 sm:right-4"
+                            :style="{ opacity: telemetry.radar.right }"
+                            aria-hidden="true"
+                        ></div>
+                    </template>
 
                     <!-- ODbL иска източникът да се вижда там, където се вижда и картата. -->
                     <div class="pointer-events-none absolute bottom-0 left-0 hidden p-2 text-[11px] text-white/35 sm:block">
@@ -3134,7 +3371,7 @@ const recenterTilt = () => {
                                 <p v-if="rivals === 'race'" class="mt-1.5 text-[11px] text-zinc-500">
                                     Стартирате заедно от решетката (ти си П{{ RIVAL_COUNT + 1 }}) —
                                     светлините гаснат и потегляте, с истински контакт между колите.
-                                    Затова времето не влиза в класацията — за рекорд карай „Сам на пистата".
+                                    Общото време отива в класацията „Състезание" — +{{ RACE_PENALTY_SECONDS }} s за всяко излизане от пистата.
                                 </p>
                             </div>
 
@@ -3473,6 +3710,51 @@ const recenterTilt = () => {
                                 </div>
                             </div>
 
+                            <!-- Общо време за класацията „Състезание" -->
+                            <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/60 px-4 py-3 text-center">
+                                <div class="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Общо време</div>
+                                <div class="font-display text-3xl font-black tabular-nums text-zinc-100">
+                                    {{ formatMs(raceResult.totalMs) }}
+                                </div>
+                                <div class="mt-0.5 text-xs tabular-nums" :class="raceResult.penalties > 0 ? 'text-red-300' : 'text-zinc-500'">
+                                    <template v-if="raceResult.penalties > 0">
+                                        {{ formatMs(raceResult.raceMs) }} + {{ raceResult.penalties }} × {{ RACE_PENALTY_SECONDS }} s
+                                        <span class="text-zinc-400">
+                                            ({{ [
+                                                raceResult.trackLimits ? `излизания: ${raceResult.trackLimits}` : null,
+                                                raceResult.contactFaults ? `удари: ${raceResult.contactFaults}` : null,
+                                            ].filter(Boolean).join(', ') }})
+                                        </span>
+                                    </template>
+                                    <template v-else>Без наказания</template>
+                                </div>
+
+                                <div v-if="raceSubmitting" class="mt-2 text-xs text-zinc-400" role="status">
+                                    Записване…
+                                </div>
+                                <div v-else-if="raceSubmitError" class="mt-2 text-xs text-red-400" role="alert">
+                                    {{ raceSubmitError }}
+                                </div>
+                                <div v-else-if="raceMeta" class="mt-2 flex flex-wrap items-center justify-center gap-2 text-xs">
+                                    <span
+                                        v-if="raceMeta.personal_best"
+                                        class="rounded-full bg-emerald-500/20 px-2.5 py-1 font-semibold text-emerald-300"
+                                    >
+                                        Личен рекорд!
+                                    </span>
+                                    <span class="text-zinc-300">
+                                        №{{ raceMeta.rank }} в класацията „Състезание"
+                                    </span>
+                                </div>
+                                <div v-else-if="!authUser" class="mt-2 text-xs text-zinc-300">
+                                    <a href="/login" class="font-semibold text-[#e10600] hover:underline">Влез</a>,
+                                    за да запишеш времето си в класацията.
+                                </div>
+                                <div v-else-if="!raceHasTrace" class="mt-2 text-xs text-zinc-500">
+                                    Състезанието е твърде дълго за запис — не влиза в класацията.
+                                </div>
+                            </div>
+
                             <!-- Подиумът: 2-1-3 -->
                             <div class="mt-5 flex items-end justify-center gap-2">
                                 <div
@@ -3499,26 +3781,45 @@ const recenterTilt = () => {
                                 </div>
                             </div>
 
-                            <!-- Пълното класиране (+ най-бърза обиколка, ако Game я праща) -->
+                            <!-- Задочна битка: общото време срещу реалното състезание на съперника -->
+                            <div
+                                v-if="raceResult.rival"
+                                class="mt-3 rounded-xl border border-fuchsia-500/30 bg-fuchsia-500/10 px-4 py-2 text-center text-sm text-zinc-200"
+                            >
+                                Срещу {{ raceResult.rival.name }}:
+                                <span
+                                    class="font-display font-bold tabular-nums"
+                                    :class="raceResult.rival.deltaMs <= 0 ? 'text-emerald-300' : 'text-red-300'"
+                                >{{ raceResult.rival.deltaMs <= 0 ? '−' : '+' }}{{ (Math.abs(raceResult.rival.deltaMs) / 1000).toFixed(3) }} s</span>
+                                <div class="text-xs text-zinc-400">{{ raceResult.rival.deltaMs <= 0 ? 'Би го!' : 'Този път не стигна.' }}</div>
+                            </div>
+
+                            <!-- Класирането: време + наказания; ботовете зад теб доизкарват -->
                             <ol class="mt-4 space-y-1 border-t border-zinc-800 pt-3">
                                 <li
-                                    v-for="row in raceResult.standings"
+                                    v-for="row in raceResult.classification ?? []"
                                     :key="row.position"
                                     class="flex items-baseline justify-between gap-3 text-sm"
                                     :class="row.isPlayer ? 'font-bold text-fuchsia-300' : 'text-zinc-300'"
                                 >
-                                    <span>
+                                    <span class="min-w-0 truncate">
                                         <span class="tabular-nums text-zinc-500">{{ row.position }}.</span>
                                         {{ row.isPlayer ? 'Ти' : row.name }}
+                                        <span
+                                            v-if="row.fastestLap"
+                                            class="ml-1 rounded bg-fuchsia-600/30 px-1 text-[10px] font-bold text-fuchsia-200"
+                                            :title="`Най-бърза обиколка ${formatMs(row.bestLapMs)}`"
+                                        >⏱ {{ formatMs(row.bestLapMs) }}</span>
+                                        <span v-if="row.penalties > 0" class="ml-1 text-[11px] font-semibold text-red-300">+{{ row.penalties * RACE_PENALTY_SECONDS }} s</span>
                                     </span>
-                                    <span
-                                        v-if="typeof row.bestLapMs === 'number'"
-                                        class="font-display text-xs font-bold tabular-nums text-zinc-400"
-                                    >
-                                        {{ formatMs(row.bestLapMs) }}
+                                    <span class="shrink-0 font-display text-xs font-bold tabular-nums text-zinc-400">
+                                        {{ classificationTime(row) }}
                                     </span>
                                 </li>
                             </ol>
+                            <p v-if="!raceResult.final" class="mt-2 text-center text-[11px] text-zinc-500" role="status">
+                                Временно класиране — полето още финишира.
+                            </p>
                                 </div>
 
                                 <div class="grid shrink-0 grid-cols-2 gap-2 border-t border-white/10 bg-zinc-950/75 p-3 backdrop-blur sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:p-4">
