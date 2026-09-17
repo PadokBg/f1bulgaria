@@ -150,21 +150,21 @@ it('rejects malformed or incomplete batches atomically', function (array $events
     'unexpected key' => [[drivingEvent(1, 'started') + ['extra' => true]]],
 ]);
 
-it('records a browser-killed graphics context as a failed attempt', function () {
-    // Brave 1.93 отнема WebGL контекста сам (brave-browser#57902): играта спира
-    // да рисува, а симулацията върви — в статистиката трябва да се вижда защо
-    // карането е свършило, а не просто „прекъснато".
+it('records a graphics failure as a failed attempt with its reason', function (string $code) {
+    // Двата известни случая на празно платно с жив HUD: отнет контекст (Brave
+    // 1.93, brave-browser#57902) и несвързан шейдър (Pixel 10 / Android 17).
+    // В статистиката трябва да се вижда защо карането е свършило.
     $session = GameSession::factory()->tracked()->create();
     $url = route('game.session.events', $session);
 
     $this->actingAs($session->user)
         ->postJson($url, ['events' => [
             drivingEvent(1, 'started'),
-            drivingEvent(2, 'error', ['error_code' => 'webgl_context_lost'], 9000),
+            drivingEvent(2, 'error', ['error_code' => $code], 9000),
         ]])
         ->assertNoContent();
 
     expect($session->fresh()->status)->toBe('error')
         ->and($session->fresh()->ended_at)->not->toBeNull()
-        ->and($session->events()->where('type', 'error')->value('data'))->toBe(['error_code' => 'webgl_context_lost']);
-});
+        ->and($session->events()->where('type', 'error')->value('data'))->toBe(['error_code' => $code]);
+})->with(['webgl_context_lost', 'shader_failed']);

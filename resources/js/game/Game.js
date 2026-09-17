@@ -196,7 +196,10 @@ function isLowPowerDevice() {
 function clampLowPowerQuality(quality) {
     quality.postFx = false;
     quality.motionBlur = false;
-    quality.shadows = 'low';
+    // 'off' е спасителният режим (виж SHADOWS_OFF в Game/Index.vue): таванът
+    // за слаб хардуер го СВАЛЯ до 'low', ако го презапише, и телефонът с
+    // счупен сенчест шейдър пак остава без картина.
+    quality.shadows = quality.shadows === 'off' ? 'off' : 'low';
     quality.csmQuality = 'low';
     quality.ao = false;
     quality.particles = clamp(Number.isFinite(quality.particles) ? quality.particles : 0.5, 0.25, 0.5);
@@ -221,7 +224,7 @@ function clampAdaptiveQuality(quality, stage) {
 
     if (stage >= 2) {
         quality.postFx = false;
-        quality.shadows = 'low';
+        quality.shadows = quality.shadows === 'off' ? 'off' : 'low';
         quality.csmQuality = 'low';
         quality.ao = false;
         quality.particles = Math.min(quality.particles, 0.5);
@@ -238,6 +241,16 @@ export class Game {
      */
     constructor(canvas, trackData, onTelemetry, onFinish = () => {}, options = {}) {
         this.canvas = canvas;
+        // Фатална грешка (виж #fail): Vue сваля играта и показва съобщение. По
+        // подразбиране само логва — играта е ползваема и без Vue. Стои НАЙ-
+        // ОТПРЕД, защото шейдър може да не се свърже още в конструктора
+        // (небето се рендерира там) — тогава #fail пада върху него.
+        this.onFatalError = (error) => {
+            console.error('Game: фатална грешка', error);
+        };
+        this.failed = false;
+        this.failure = null; // грешката, ако е гръмнало преди Vue да закачи своя onFatalError
+        this.frameErrors = 0; // поредни гръмнали кадри (виж #frameFailed)
         this.onTelemetry = onTelemetry;
         this.onFinish = onFinish;
         this.simVersion = SIM_VERSION;
@@ -311,13 +324,31 @@ export class Game {
         };
         canvas.addEventListener('webglcontextlost', this.onContextLostEvent);
 
+        // Драйвер, който не може да свърже шейдър, е другият начин да се стигне
+        // до празно платно с жив HUD: three само логва в конзолата и рисува
+        // нищо. Известен случай е Pixel 10 (Tensor G5 / PowerVR) на Android 17
+        // — „Shader Error 1282, VALIDATE_STATUS false" с празен лог, който бие
+        // и по други сайтове с 3D (three.js#34311). Първият такъв шейдър сваля
+        // играта със съобщение вместо да я остави да „върви" невидима.
+        this.shaderFailed = false;
+        this.renderer.debug.onShaderError = (gl, program, vertexShader, fragmentShader) => {
+            this.shaderFailed = true;
+            const log = (shader) => gl.getShaderInfoLog(shader)?.trim() || '(празен лог)';
+            this.#fail(
+                new Error(
+                    `Шейдърът не се свърза: ${gl.getProgramInfoLog(program)?.trim() || '(празен лог)'} · ` +
+                        `vertex: ${log(vertexShader)} · fragment: ${log(fragmentShader)}`
+                )
+            );
+        };
+
         // Филмов tone mapping + сенки. Експозицията е част от атмосферата на
         // пистата (мек Спа срещу ярко крайбрежие в Зандвоорт), мащабирана за
         // избрания tone mapper (виж TONE_MAPPING).
         const tone = TONE_PRESETS[TONE_MAPPING];
         this.renderer.toneMapping = tone.mapping;
         this.renderer.toneMappingExposure = this.circuit.atmosphere.exposure * tone.exposureScale;
-        this.renderer.shadowMap.enabled = true;
+        this.renderer.shadowMap.enabled = this.quality.shadows !== 'off';
         // Телефон: PCF (не Soft) — tap-овете са в пъти по-евтини, а на
         // малък екран разликата не се чете.
         this.renderer.shadowMap.type = this.lowPower ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
@@ -514,7 +545,10 @@ export class Game {
         });
         this.chaseCamera.snap(this.sim.state, this.sim.surface);
         this.lookTarget = this.chaseCamera.lookTarget;
-        this.cascadedShadows = createCascadedShadows({
+        // Спасителният режим не строи каскадните сенки: те кърпят всеки
+        // материал със свой GLSL, а точно свързването на шейдър е това, което
+        // гърми на счупения драйвер.
+        this.cascadedShadows = this.quality.shadows === 'off' ? null : createCascadedShadows({
             camera: this.camera,
             scene: this.scene,
             renderer: this.renderer,
@@ -610,13 +644,6 @@ export class Game {
         // (R / „Рестарт" по време на реплей) чисти и Vue състоянието през това.
         this.onResultClear = () => {};
 
-        // Фатална грешка в кадъра (виж #fail): Vue сваля играта и показва
-        // съобщение. По подразбиране само логва — играта е ползваема и без Vue.
-        this.onFatalError = (error) => {
-            console.error('Game: фатална грешка в кадъра', error);
-        };
-        this.failed = false;
-        this.frameErrors = 0; // поредни гръмнали кадри (виж #frameFailed)
 
         // Дуел: духът на съперник от класацията (сървърни кадри). Докато е
         // зареден, се показва ТОЙ (фуксия), а не личният/официалният.
@@ -796,6 +823,7 @@ export class Game {
             return;
         }
         this.failed = true;
+        this.failure = error;
         // Спирането не бива да скрие сигнала: гръмне ли и то, Vue все пак
         // трябва да разбере, а dispose() ще довърши чистенето.
         try {
@@ -1596,7 +1624,7 @@ export class Game {
         this.atmosphere.setHemisphere(hemisphere);
 
         const sun = new THREE.DirectionalLight(atmosphere.sunColor, atmosphere.sunIntensity);
-        sun.castShadow = true;
+        sun.castShadow = this.quality.shadows !== 'off';
         // Bias в световни метри, ~1 texel от кутията (виж #applyShadowSize).
         // Старите 0.6 m бяха ~10 texel-а: точката на сянката се вдигаше над
         // колелата и дъното, а отпечатъкът се местеше към слънцето с
@@ -1738,6 +1766,11 @@ export class Game {
      * @param {'low'|'high'} level
      */
     #applyShadowSize(sun, level) {
+        sun.castShadow = level !== 'off';
+        this.renderer.shadowMap.enabled = level !== 'off';
+        if (level === 'off') {
+            return;
+        }
         const size = level === 'high' ? 1024 : 512;
         sun.shadow.mapSize.set(size, size);
         sun.shadow.normalBias = size >= 1024 ? 0.05 : 0.08;

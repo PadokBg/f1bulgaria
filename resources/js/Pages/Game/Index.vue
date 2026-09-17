@@ -238,6 +238,44 @@ const QUALITY_PRESETS = {
     ultra: { adaptive: false, postFx: true, shadows: 'high', csmQuality: 'ultra', ao: true, particles: 1, dpr: 2 },
 };
 
+/**
+ * Спасителен вид: без сенки, без composer, минимални частици. Драйвер, който
+ * не свързва сенчестия шейдър (Pixel 10 / Android 17 — three.js#34311), иначе
+ * оставя празно платно. Пробва се АВТОМАТИЧНО веднъж, след като графиката е
+ * отказала, и се помни за това устройство.
+ */
+const SAFE_GRAPHICS = { adaptive: false, postFx: false, shadows: 'off', csmQuality: 'low', ao: false, particles: 0.25, dpr: 1 };
+const SAFE_GRAPHICS_KEY = 'padok-game-safe-graphics';
+
+const readSafeGraphics = () => {
+    try {
+        return window.localStorage.getItem(SAFE_GRAPHICS_KEY) === '1';
+    } catch {
+        return false;
+    }
+};
+
+const rememberSafeGraphics = () => {
+    try {
+        window.localStorage.setItem(SAFE_GRAPHICS_KEY, '1');
+    } catch {
+        // Без запис спасителният вид важи поне до презареждане.
+    }
+};
+
+const forgetSafeGraphics = () => {
+    try {
+        window.localStorage.removeItem(SAFE_GRAPHICS_KEY);
+    } catch {
+        // Няма какво да се чисти, ако записът е бил невъзможен.
+    }
+};
+
+// Устройството вече е отказало да свърже шейдър → всички следващи опити
+// тръгват направо в спасителен вид (виж SAFE_GRAPHICS). localStorage може да
+// е недостъпен (Private/блокирани бисквитки) — тогава важи само за сесията.
+const safeGraphics = ref(readSafeGraphics());
+
 const isValidSetting = (key, value) => {
     switch (key) {
         case 'camera':
@@ -339,10 +377,14 @@ const applyQuality = (instance = game.value) => {
         // VRAM спрямо DPR 2. High/Ultra остават опцията за пълния таван.
         dpr: Math.min(1.5, window.devicePixelRatio || 1),
     };
-    const patch = {
-        motionBlur: settings.value.motionBlur,
-        ...(qualityPatchFor(settings.value.quality) ?? automatic),
-    };
+    const patch = safeGraphics.value
+        // Спасителният вид е над всичко: запазеният пресет (или „Авто") иначе
+        // веднага връща сенките, заради които устройството е отказало.
+        ? { motionBlur: false, ...SAFE_GRAPHICS }
+        : {
+            motionBlur: settings.value.motionBlur,
+            ...(qualityPatchFor(settings.value.quality) ?? automatic),
+        };
     // Само реално различните ключове: postFx/ao пресъздават composer-а и
     // претоплят шейдърите — не бива да го правим при всяко зареждане.
     const diff = {};
@@ -426,6 +468,10 @@ const toggleMotionBlur = () => {
 // преди този на v-model и би прочел СТАРИЯ пресет.
 const setQualityPreset = (preset) => {
     if (QUALITY_OPTIONS.some((opt) => opt.v === preset)) {
+        // Ръчен избор отменя спасителния вид: телефонът може да е обновен,
+        // а иначе играчът остава без сенки завинаги, без да разбере защо.
+        safeGraphics.value = false;
+        forgetSafeGraphics();
         settings.value.quality = preset;
         applyQuality();
     }
@@ -1611,7 +1657,7 @@ const startGame = async (track, rivalUserId = null, raceRivalUserId = null) => {
             },
             // Пресетът/условията в конструктора спестяват пресъздаване на
             // composer-а след старта; applyQuality по-долу е no-op, ако са приложени.
-            quality: qualityPatchFor(settings.value.quality),
+            quality: safeGraphics.value ? SAFE_GRAPHICS : qualityPatchFor(settings.value.quality),
             weather: settings.value.weather,
         });
 
@@ -1628,17 +1674,43 @@ const startGame = async (track, rivalUserId = null, raceRivalUserId = null) => {
             if (game.value !== instance) {
                 return;
             }
-            // Прекъснатият контекст не е грешка в играта: браузърът е отнел
-            // графиката (Brave 1.93 го прави сам). Казваме какво да се направи,
-            // вместо общото „грешка на това устройство".
-            const lost = instance.contextLost === true;
+            // Двата известни начина да се стигне до празно платно с жив HUD не
+            // са грешка в играта: браузърът отнема графиката (Brave 1.93), или
+            // драйверът не свързва шейдър (Pixel 10 / Android 17). Всеки казва
+            // какво да се направи, вместо общото „грешка на това устройство".
+            const reason = instance.contextLost === true ? 'context' : instance.shaderFailed === true ? 'shader' : 'render';
             console.error('Играта спря заради повторяема грешка в кадъра.', cause);
-            sessionTracker.end('error', { error_code: lost ? 'webgl_context_lost' : 'render_failed' });
+            sessionTracker.end('error', {
+                error_code: { context: 'webgl_context_lost', shader: 'shader_failed', render: 'render_failed' }[reason],
+            });
+            const track = selectedTrack.value;
             quit();
-            error.value = lost
-                ? 'Браузърът прекъсна графиката на играта. Ако си с Brave, натисни лъвчето до адреса, изключи щитовете за padok.bg и презареди — или пробвай с Chrome.'
-                : 'Играта спря заради грешка на това устройство. Опитай отново или с друг браузър.';
+            // Счупен сенчест шейдър (Pixel 10 / Android 17) е единственият отказ
+            // с шанс да се заобиколи: спасителният вид маха сенките и CSM-а,
+            // тоест точно шейдърите, които драйверът отказва. Пробва се веднъж,
+            // сам — играчът няма как да знае, че трябва да пипа настройките.
+            if (reason === 'shader' && !safeGraphics.value && track) {
+                safeGraphics.value = true;
+                rememberSafeGraphics();
+                error.value = 'Графиката не тръгна на този телефон — пробваме пак в облекчен вид, без сенки.';
+                void startGame(track);
+
+                return;
+            }
+            error.value = {
+                context: 'Браузърът прекъсна графиката на играта. Ако си с Brave, натисни лъвчето до адреса, изключи щитовете за padok.bg и презареди — или пробвай с Chrome.',
+                shader: 'Графиката не тръгва на този телефон дори в облекчен вид. Това е известен проблем на новите Pixel-и с Android 17 и удря 3D сайтовете изобщо, не само Падок. Пробвай с друг браузър (Firefox) или изчакай обновяване на телефона.',
+                render: 'Играта спря заради грешка на това устройство. Опитай отново или с друг браузър.',
+            }[reason];
         };
+        // Небето се рендерира в конструктора: счупен драйвер може да е гръмнал
+        // ПРЕДИ този ред и #fail да е останал без слушател. Догонваме го, иначе
+        // играчът чака зареждане, което няма да свърши.
+        if (instance.failed) {
+            instance.onFatalError(instance.failure);
+
+            return;
+        }
         trackOutline.value = instance.minimap?.path ?? null;
         applyQuality(instance);
         applyWeather(instance);
