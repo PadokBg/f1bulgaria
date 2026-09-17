@@ -33,4 +33,8 @@ return [
     // „Инженерство“ (/inzhenerstvo) — обяснителната рубрика за техниката.
     // Съдържанието е в config/engineering-content.php.
     'engineering' => env('FEATURE_ENGINEERING', false),
+
+    // Оперативният MCP сървър (/mcp/ops) за админа — виж config/ops.php.
+    // Изключен → рутът връща 404, както скрития /admin.
+    'mcp_ops' => env('FEATURE_MCP_OPS', false),
 ];

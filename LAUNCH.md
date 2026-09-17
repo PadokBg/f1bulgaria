@@ -268,6 +268,39 @@ php artisan padok:sync-admin
 php artisan tinker --execute 'App\Models\User::where("email","ti@padok.bg")->update(["is_admin"=>true]);'
 ```
 
+## 9а. Оперативен MCP сървър (`/mcp/ops`, само четене)
+
+Read-only достъп до прод за админа през MCP клиент (Claude Code, claude.ai) — без SSH:
+`site-overview`, `recent-users`, `queue-health`, `recent-logs`, `race-predictions`,
+`league-standings`, `sql-query` (само SELECT). Всяко извикване се записва в `mcp_tool_calls`.
+Код: `routes/ai.php`, `app/Mcp/`, `config/ops.php`.
+
+Включване (всичко като `www-data`, после `config:cache` — конфигът е кеширан):
+
+1. MySQL потребител САМО със SELECT (истинската гаранция на `sql-query`):
+   ```sql
+   CREATE USER 'padok_ro'@'localhost' IDENTIFIED BY '<парола>';
+   GRANT SELECT ON f1bulgaria.* TO 'padok_ro'@'localhost';
+   ```
+   и в `.env`: `DB_READONLY_USERNAME=padok_ro`, `DB_READONLY_PASSWORD=...`. Без тях
+   инструментът `sql-query` просто не се регистрира — останалите работят.
+2. `FEATURE_MCP_OPS=true` в `.env` (изключен → 404, както скрития `/admin`).
+3. `sudo -u www-data php artisan config:cache`
+4. Токен (показва се веднъж; същото име = ротация; `--revoke` отменя):
+   ```bash
+   sudo -u www-data php artisan padok:mcp-token --name=claude-code --days=90
+   ```
+   Издава се само на действащ админ (`is_admin` + без бан) и портата го проверява пак
+   при всяка заявка — бан или свалени права = токенът спира да работи веднага.
+
+Клиент (токенът през променлива — вписан в командата остава в историята на терминала):
+```bash
+read -s PADOK_MCP_TOKEN   # постави токена, Enter; PowerShell: $env:PADOK_MCP_TOKEN = Read-Host
+claude mcp add --transport http padok-ops https://padok.bg/mcp/ops --header "Authorization: Bearer $PADOK_MCP_TOKEN"
+```
+Локална проверка: `php artisan mcp:inspector mcp/ops`. Отказани извиквания (напр. опит за
+DELETE през `sql-query`) са с `is_error = 1` в `mcp_tool_calls` — HTTP статусът им е 200.
+
 ## 10. Backup стратегия
 
 - **БД**: дневен `mysqldump` (cron), retention 14–30 дни, off-server копие (S3/друг хост):

@@ -19,6 +19,13 @@ Schedule::command('model:prune', ['--model' => [GameSessionEvent::class, GameVis
     ->timezone('Europe/Sofia')
     ->onOneServer();
 
+// Изтеклите MCP токени (padok:mcp-token --days) спират да важат сами;
+// това само чисти редовете им от personal_access_tokens.
+Schedule::command('sanctum:prune-expired --hours=24')
+    ->dailyAt('04:20')
+    ->timezone('Europe/Sofia')
+    ->onOneServer();
+
 // Заключва прогнозите 5 мин преди квалификацията — върви всяка минута.
 Schedule::command('f1:lock-predictions')
     ->everyMinute()

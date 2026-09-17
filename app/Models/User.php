@@ -14,11 +14,12 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Laravel\Sanctum\HasApiTokens;
 
 class User extends Authenticatable implements FilamentUser
 {
     /** @use HasFactory<UserFactory> */
-    use HasFactory, Notifiable;
+    use HasApiTokens, HasFactory, Notifiable;
 
     /**
      * @var list<string>
@@ -59,6 +60,16 @@ class User extends Authenticatable implements FilamentUser
     }
 
     public function canAccessPanel(Panel $panel): bool
+    {
+        return $this->isActiveAdmin();
+    }
+
+    /**
+     * Админ с действащи права: флагът е вдигнат И акаунтът не е блокиран.
+     * Единственото място за това правило — панелът, MCP достъпът и издаването
+     * на токени го четат оттук, за да не се разминат.
+     */
+    public function isActiveAdmin(): bool
     {
         return $this->is_admin && $this->banned_at === null;
     }

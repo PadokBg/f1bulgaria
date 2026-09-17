@@ -54,5 +54,8 @@
         <env name="FEATURE_F2" value="true"/>
         <env name="FEATURE_LIVE_TIMING" value="true"/>
         <env name="FEATURE_THIS_DAY" value="true"/>
+        <env name="FEATURE_MCP_OPS" value="true"/>
+        <!-- sql-query на MCP сървъра чете през същата in-memory sqlite база. -->
+        <env name="OPS_QUERY_CONNECTION" value="sqlite"/>
     </php>
 </phpunit>

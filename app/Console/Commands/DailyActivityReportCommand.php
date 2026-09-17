@@ -12,11 +12,11 @@ use App\Models\RaceDataRecap;
 use App\Models\Season;
 use App\Models\User;
 use App\Services\Newsletter\NewsletterAudience;
+use App\Services\Ops\QueueHealthInspector;
 use App\Services\Predictions\PredictionLockService;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 
 /**
@@ -42,16 +42,6 @@ class DailyActivityReportCommand extends Command
         {--preview : Отпечатай отчета в конзолата вместо да пращаш имейл}';
 
     protected $description = 'Дневен отчет за активността и здравето на автоматиките — праща имейл на админа.';
-
-    /**
-     * Над толкова минути чакане задачата вече не е пик, а спрял worker.
-     *
-     * При този размер общност опашката се изпразва за секунди — най-дългата
-     * истинска задача (една вълна писма) е под минута. Петнайсет минути дават
-     * запас за рестарта при деплой (queue:restart + systemd RestartSec), без да
-     * пропуснат мъртъв worker: той се вижда още на първия отчет.
-     */
-    private const QUEUE_STALE_MINUTES = 15;
 
     /**
      * Дневният таван идва от `mail.daily_cap`, тоест от средата.
@@ -84,8 +74,11 @@ class DailyActivityReportCommand extends Command
     /** До толкова часа преди заключването нула прогнози вече е сигнал, а не спокойствие. */
     private const LEAGUE_ALARM_HOURS = 48;
 
-    public function handle(NewsletterAudience $audience, PredictionLockService $locks): int
-    {
+    public function handle(
+        NewsletterAudience $audience,
+        PredictionLockService $locks,
+        QueueHealthInspector $queue,
+    ): int {
         $tz = 'Europe/Sofia';
         $day = $this->option('date')
             ? CarbonImmutable::parse((string) $this->option('date'), $tz)
@@ -109,7 +102,7 @@ class DailyActivityReportCommand extends Command
             'total_users' => User::count(),
             'new_emails' => $events->where('type', AuthEvent::TYPE_REGISTERED)
                 ->pluck('email')->filter()->values()->all(),
-            'health' => $this->health($from, $to, $audience, $locks),
+            'health' => $this->health($from, $to, $audience, $locks, $queue),
         ];
 
         if ($this->option('preview')) {
@@ -146,9 +139,10 @@ class DailyActivityReportCommand extends Command
         CarbonImmutable $to,
         NewsletterAudience $audience,
         PredictionLockService $locks,
+        QueueHealthInspector $queue,
     ): array {
         $sections = [
-            'queue' => $this->queueHealth($from, $to),
+            'queue' => $this->queueHealth($from, $to, $queue),
             'mail' => $this->mailHealth($from, $to, $audience),
             'recaps' => $this->recapHealth(),
             'league' => $this->leagueHealth($locks),
@@ -170,15 +164,15 @@ class DailyActivityReportCommand extends Command
      *
      * @return array<string, mixed>
      */
-    private function queueHealth(CarbonImmutable $from, CarbonImmutable $to): array
+    private function queueHealth(CarbonImmutable $from, CarbonImmutable $to, QueueHealthInspector $queue): array
     {
-        $connection = (string) config('queue.default');
-        $driver = (string) config("queue.connections.{$connection}.driver", $connection);
+        $snapshot = $queue->inspect($from, $to);
+        $driver = $snapshot['driver'];
 
         // Броенето минава през таблиците jobs и failed_jobs. При друг драйвер
         // няма какво да се преброи и отчетът го казва, вместо да покаже
         // успокоителни нули.
-        if ($driver !== 'database') {
+        if (! $snapshot['counts_from_database']) {
             return [
                 'driver' => $driver,
                 'pending' => 0,
@@ -189,24 +183,13 @@ class DailyActivityReportCommand extends Command
             ];
         }
 
-        $pending = DB::table('jobs')->count();
-
-        // Възрастта се мери от available_at, не от created_at: отложената задача
-        // стои в таблицата по проект и не е закъснение, докато часът ѝ не дойде.
-        // По created_at всяко отложено писмо би вдигало фалшива аларма.
-        $oldestAvailableAt = DB::table('jobs')
-            ->where('available_at', '<=', now()->getTimestamp())
-            ->min('available_at');
-
-        $oldestMinutes = $oldestAvailableAt === null
-            ? null
-            : (int) floor((now()->getTimestamp() - (int) $oldestAvailableAt) / 60);
-
-        $failedToday = DB::table('failed_jobs')->whereBetween('failed_at', [$from, $to])->count();
+        $pending = $snapshot['pending'];
+        $oldestMinutes = $snapshot['oldest_minutes'];
+        $failedToday = $snapshot['failed_in_window'];
 
         $problems = [];
 
-        if ($oldestMinutes !== null && $oldestMinutes >= self::QUEUE_STALE_MINUTES) {
+        if ($queue->isStale($oldestMinutes)) {
             $problems[] = [
                 'label' => 'опашката стои',
                 'text' => "Най-старата готова задача чака {$this->humanMinutes($oldestMinutes)}, чакащи общо: {$pending}. "

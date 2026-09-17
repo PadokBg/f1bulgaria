@@ -6,6 +6,7 @@ use App\Services\Feedback\SurveyPromptService;
 use App\Services\LiveTiming\LiveWindowService;
 use App\Support\Seo;
 use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
 use Inertia\Middleware;
 
 class HandleInertiaRequests extends Middleware
@@ -41,7 +42,9 @@ class HandleInertiaRequests extends Middleware
                 'success' => fn () => $request->session()->get('success'),
             ],
             'teamBrands' => fn () => config('team-brands'),
-            'features' => fn () => config('features'),
+            // mcp_ops е сървърен флаг (скрит админ endpoint) — няма какво да
+            // прави в навигацията, а издава, че такъв рут съществува.
+            'features' => fn () => Arr::except(config('features'), ['mcp_ops']),
             // Тече ли сесия в момента (по разписание, кеш 60 сек) — линкът
             // „На живо" в навигацията се показва само тогава: постоянен
             // „На живо" в менюто в сряда обучава хората, че лъже.
