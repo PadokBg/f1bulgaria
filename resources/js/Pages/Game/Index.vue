@@ -1628,10 +1628,16 @@ const startGame = async (track, rivalUserId = null, raceRivalUserId = null) => {
             if (game.value !== instance) {
                 return;
             }
+            // Прекъснатият контекст не е грешка в играта: браузърът е отнел
+            // графиката (Brave 1.93 го прави сам). Казваме какво да се направи,
+            // вместо общото „грешка на това устройство".
+            const lost = instance.contextLost === true;
             console.error('Играта спря заради повторяема грешка в кадъра.', cause);
-            sessionTracker.end('error', { error_code: 'render_failed' });
+            sessionTracker.end('error', { error_code: lost ? 'webgl_context_lost' : 'render_failed' });
             quit();
-            error.value = 'Играта спря заради грешка на това устройство. Опитай отново или с друг браузър.';
+            error.value = lost
+                ? 'Браузърът прекъсна графиката на играта. Ако си с Brave, натисни лъвчето до адреса, изключи щитовете за padok.bg и презареди — или пробвай с Chrome.'
+                : 'Играта спря заради грешка на това устройство. Опитай отново или с друг браузър.';
         };
         trackOutline.value = instance.minimap?.path ?? null;
         applyQuality(instance);

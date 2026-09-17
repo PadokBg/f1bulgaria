@@ -295,6 +295,22 @@ export class Game {
         this.autoQualitySlowSeconds = 0;
         this.renderer.setPixelRatio(this.baseDpr);
 
+        // Браузърът може да отнеме WebGL контекста (рестарт на драйвера, липса
+        // на видео памет, а от Brave 1.93 — и защитата му срещу fingerprinting,
+        // brave-browser#57902). Кадрите след това не рисуват НИЩО, но
+        // симулацията, HUD-ът и звукът си вървят: играчът гледа бяло платно с
+        // жив скоростомер и мисли, че играта се е счупила. Третираме го като
+        // фатално — Vue сваля играта и казва какво да направи.
+        // preventDefault() е задължителен: без него браузърът дори не опитва
+        // да върне контекста.
+        this.contextLost = false;
+        this.onContextLostEvent = (event) => {
+            event.preventDefault();
+            this.contextLost = true;
+            this.#fail(new Error('Браузърът прекъсна WebGL контекста.'));
+        };
+        canvas.addEventListener('webglcontextlost', this.onContextLostEvent);
+
         // Филмов tone mapping + сенки. Експозицията е част от атмосферата на
         // пистата (мек Спа срещу ярко крайбрежие в Зандвоорт), мащабирана за
         // избрания tone mapper (виж TONE_MAPPING).
@@ -2215,6 +2231,7 @@ export class Game {
         window.removeEventListener('blur', this.onBlur);
         window.removeEventListener('focus', this.onFocus);
         document.removeEventListener('visibilitychange', this.onVisibility);
+        this.canvas.removeEventListener('webglcontextlost', this.onContextLostEvent);
     }
 
     #readInput() {

@@ -149,3 +149,22 @@ it('rejects malformed or incomplete batches atomically', function (array $events
     'solo race finish' => [[drivingEvent(1, 'race_completed')]],
     'unexpected key' => [[drivingEvent(1, 'started') + ['extra' => true]]],
 ]);
+
+it('records a browser-killed graphics context as a failed attempt', function () {
+    // Brave 1.93 отнема WebGL контекста сам (brave-browser#57902): играта спира
+    // да рисува, а симулацията върви — в статистиката трябва да се вижда защо
+    // карането е свършило, а не просто „прекъснато".
+    $session = GameSession::factory()->tracked()->create();
+    $url = route('game.session.events', $session);
+
+    $this->actingAs($session->user)
+        ->postJson($url, ['events' => [
+            drivingEvent(1, 'started'),
+            drivingEvent(2, 'error', ['error_code' => 'webgl_context_lost'], 9000),
+        ]])
+        ->assertNoContent();
+
+    expect($session->fresh()->status)->toBe('error')
+        ->and($session->fresh()->ended_at)->not->toBeNull()
+        ->and($session->events()->where('type', 'error')->value('data'))->toBe(['error_code' => 'webgl_context_lost']);
+});
