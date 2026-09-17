@@ -147,4 +147,29 @@ return [
         ],
     ],
 
+    /*
+    |----------------------------------------------------------------------
+    | Гласът на радиото
+    |----------------------------------------------------------------------
+    |
+    | Фразите са в resources/js/game/radioPhrases.json (четат ги и играта, и
+    | генераторът). game:generate-radio-voice ги озвучава през ElevenLabs
+    | веднъж, офлайн — клиповете и manifest.json влизат в репото.
+    |
+    */
+    'radio_voice' => [
+        'phrases' => resource_path('js/game/radioPhrases.json'),
+        'path' => public_path('game-audio/radio'),
+        // Извън storage/app/game (който е в git заради кешовете на пистите).
+        'samples_path' => storage_path('app/radio-samples'),
+
+        // Инженерите по радиото (безплатни premade гласове на ElevenLabs).
+        // Играта избира случаен за всяко състезание. Ключът е и папката.
+        'voices' => [
+            'daniel' => 'onwK4e9ZLuTAKqWW03F9',
+            'charlie' => 'IKne3meq5aSn9XLyUdCD',
+            'adam' => 'pNInz6obpgDQGcFmaJgB',
+        ],
+    ],
+
 ];

@@ -143,4 +143,19 @@ return [
         'key' => env('INDEXNOW_KEY'),
     ],
 
+    /*
+    | ElevenLabs — гласът на радиото в играта. Клиповете се генерират
+    | ВЕДНЪЖ офлайн (game:generate-radio-voice) и влизат в репото; играта не
+    | вика API-то и ключът не трябва на продукция.
+    |
+    | @see https://elevenlabs.io/docs/api-reference/text-to-speech/convert
+    */
+    'elevenlabs' => [
+        'key' => env('ELEVENLABS_API_KEY'),
+        'base_url' => env('ELEVENLABS_BASE_URL', 'https://api.elevenlabs.io'),
+        // multilingual_v2 поддържа български и не е Beta (Beta услугите
+        // нямат търговски лиценз); v3 е по-изразителен, но е Beta.
+        'radio_model' => env('ELEVENLABS_RADIO_MODEL', 'eleven_multilingual_v2'),
+    ],
+
 ];

@@ -1,0 +1,801 @@
+{
+    "version": 1,
+    "model": "eleven_multilingual_v2",
+    "voices": {
+        "adam": {
+            "id": "pNInz6obpgDQGcFmaJgB",
+            "clips": {
+                "bot-0-attack": {
+                    "file": "adam/bot-0-attack.mp3",
+                    "hash": "8bd9929f00019a0dd4ab7dbd5da70a4a2fdcf54f",
+                    "text": "Колев е точно зад теб."
+                },
+                "bot-0-mistake": {
+                    "file": "adam/bot-0-mistake.mp3",
+                    "hash": "b621175dfcbba4a1538a929f56ecabeeb0055810",
+                    "text": "Колев изпусна спирането!"
+                },
+                "bot-0-off": {
+                    "file": "adam/bot-0-off.mp3",
+                    "hash": "18be91581c8b7a25961859f3797db253104abbc1",
+                    "text": "Колев излезе от пистата!"
+                },
+                "bot-0-passed": {
+                    "file": "adam/bot-0-passed.mp3",
+                    "hash": "9dcab855ca25d5c0604a34079c9eb64f5fca2b96",
+                    "text": "Изпревари Колев!"
+                },
+                "bot-0-passes": {
+                    "file": "adam/bot-0-passes.mp3",
+                    "hash": "1cf368bce251e71bd35b7b938e7d46dd1c11e389",
+                    "text": "Колев те изпревари."
+                },
+                "bot-0-penalty": {
+                    "file": "adam/bot-0-penalty.mp3",
+                    "hash": "add060be69f71e18271695c60683ada3bd0bb193",
+                    "text": "Колев получи наказание за удара в теб."
+                },
+                "bot-1-attack": {
+                    "file": "adam/bot-1-attack.mp3",
+                    "hash": "c223ff68dd40afa4422e1f49184fbd23d22433f7",
+                    "text": "Петров е точно зад теб."
+                },
+                "bot-1-mistake": {
+                    "file": "adam/bot-1-mistake.mp3",
+                    "hash": "088f0176702348650f1af79731d8b35162673729",
+                    "text": "Петров изпусна спирането!"
+                },
+                "bot-1-off": {
+                    "file": "adam/bot-1-off.mp3",
+                    "hash": "d659b608cb4957e12d0dc3d509a68a68033b598b",
+                    "text": "Петров излезе от пистата!"
+                },
+                "bot-1-passed": {
+                    "file": "adam/bot-1-passed.mp3",
+                    "hash": "5fa997e1de067fc9cbfa84d7932b8bbc9b881b88",
+                    "text": "Изпревари Петров!"
+                },
+                "bot-1-passes": {
+                    "file": "adam/bot-1-passes.mp3",
+                    "hash": "b24b33c7b8e6efd8e3d05665159c071081e04c2c",
+                    "text": "Петров те изпревари."
+                },
+                "bot-1-penalty": {
+                    "file": "adam/bot-1-penalty.mp3",
+                    "hash": "8e02af5693802b2b6358d3d259e0718057edb8ee",
+                    "text": "Петров получи наказание за удара в теб."
+                },
+                "bot-2-attack": {
+                    "file": "adam/bot-2-attack.mp3",
+                    "hash": "3149565595a91ae170ae586e4d05b36ffdcd161b",
+                    "text": "Илиев е точно зад теб."
+                },
+                "bot-2-mistake": {
+                    "file": "adam/bot-2-mistake.mp3",
+                    "hash": "ebfd5c0929a9dba20735c348c4b272f43d2ff860",
+                    "text": "Илиев изпусна спирането!"
+                },
+                "bot-2-off": {
+                    "file": "adam/bot-2-off.mp3",
+                    "hash": "356e0cb66f6466265e8b3be09e82e6bb3ebbfeca",
+                    "text": "Илиев излезе от пистата!"
+                },
+                "bot-2-passed": {
+                    "file": "adam/bot-2-passed.mp3",
+                    "hash": "33a8decb77ca9c8c56e686e68ad96cc6de5a34eb",
+                    "text": "Изпревари Илиев!"
+                },
+                "bot-2-passes": {
+                    "file": "adam/bot-2-passes.mp3",
+                    "hash": "2e76357d4c4dbfcaac3b627b57b745f2ce11f040",
+                    "text": "Илиев те изпревари."
+                },
+                "bot-2-penalty": {
+                    "file": "adam/bot-2-penalty.mp3",
+                    "hash": "f2cf73589108b398061c5618793f3b27e4c19d8d",
+                    "text": "Илиев получи наказание за удара в теб."
+                },
+                "bot-3-attack": {
+                    "file": "adam/bot-3-attack.mp3",
+                    "hash": "01a98092c11fb10d86d5d9fee3e02dbc5863bf3d",
+                    "text": "Стоянов е точно зад теб."
+                },
+                "bot-3-mistake": {
+                    "file": "adam/bot-3-mistake.mp3",
+                    "hash": "b9dd3ad847c400e87e8ed907d9e64b02711c4525",
+                    "text": "Стоянов изпусна спирането!"
+                },
+                "bot-3-off": {
+                    "file": "adam/bot-3-off.mp3",
+                    "hash": "6335b3b21683bd8513fbacd310794905d4327cfc",
+                    "text": "Стоянов излезе от пистата!"
+                },
+                "bot-3-passed": {
+                    "file": "adam/bot-3-passed.mp3",
+                    "hash": "99709b35028ba17d020f9e4c2fc858d554602b09",
+                    "text": "Изпревари Стоянов!"
+                },
+                "bot-3-passes": {
+                    "file": "adam/bot-3-passes.mp3",
+                    "hash": "9c08fe4be6696e0848ec2c77dce10798cf2546b0",
+                    "text": "Стоянов те изпревари."
+                },
+                "bot-3-penalty": {
+                    "file": "adam/bot-3-penalty.mp3",
+                    "hash": "f414cdd6cfff26b59259f759b6020526ca086ad9",
+                    "text": "Стоянов получи наказание за удара в теб."
+                },
+                "bot-4-attack": {
+                    "file": "adam/bot-4-attack.mp3",
+                    "hash": "80a1f74c3e3073081d2e13b441bb93d25aadcbfd",
+                    "text": "Радев е точно зад теб."
+                },
+                "bot-4-mistake": {
+                    "file": "adam/bot-4-mistake.mp3",
+                    "hash": "a635789c1f00703cb9ff633cfe33a2995bfc2e05",
+                    "text": "Радев изпусна спирането!"
+                },
+                "bot-4-off": {
+                    "file": "adam/bot-4-off.mp3",
+                    "hash": "8d0be4742cb2c340e3295cae51d3afc232dac2ad",
+                    "text": "Радев излезе от пистата!"
+                },
+                "bot-4-passed": {
+                    "file": "adam/bot-4-passed.mp3",
+                    "hash": "d4f700618a721b794743eed299f1a3437660b8ab",
+                    "text": "Изпревари Радев!"
+                },
+                "bot-4-passes": {
+                    "file": "adam/bot-4-passes.mp3",
+                    "hash": "9dbc36812527cbf4117910141c88603adf5a8852",
+                    "text": "Радев те изпревари."
+                },
+                "bot-4-penalty": {
+                    "file": "adam/bot-4-penalty.mp3",
+                    "hash": "44b76aba41cc966a4e7db0a563cbb763678edaa0",
+                    "text": "Радев получи наказание за удара в теб."
+                },
+                "bot-5-attack": {
+                    "file": "adam/bot-5-attack.mp3",
+                    "hash": "ec915fe36de345994b16c269f3a67e8744427c14",
+                    "text": "Марков е точно зад теб."
+                },
+                "bot-5-mistake": {
+                    "file": "adam/bot-5-mistake.mp3",
+                    "hash": "6107282ba4232fe6a0115465169165b62f022efa",
+                    "text": "Марков изпусна спирането!"
+                },
+                "bot-5-off": {
+                    "file": "adam/bot-5-off.mp3",
+                    "hash": "dd427f2a1eb1ae9b72649dee63cccd5a9129b877",
+                    "text": "Марков излезе от пистата!"
+                },
+                "bot-5-passed": {
+                    "file": "adam/bot-5-passed.mp3",
+                    "hash": "5ffeabe40666f106c2c35391137978d23ebae144",
+                    "text": "Изпревари Марков!"
+                },
+                "bot-5-passes": {
+                    "file": "adam/bot-5-passes.mp3",
+                    "hash": "170b35147a02506d1ed6130e4df4b350a4d2496e",
+                    "text": "Марков те изпревари."
+                },
+                "bot-5-penalty": {
+                    "file": "adam/bot-5-penalty.mp3",
+                    "hash": "df99780deabdf594488d508c73b30468bc0c81d5",
+                    "text": "Марков получи наказание за удара в теб."
+                },
+                "drs": {
+                    "file": "adam/drs.mp3",
+                    "hash": "2d19e8860fce01cd1bc18e3aa04cd6aeef744efd",
+                    "text": "Ди Ар Ес е наличен. Атакувай!"
+                },
+                "gained-p1": {
+                    "file": "adam/gained-p1.mp3",
+                    "hash": "178f7a2192f12c53671875baab4653994e3a4028",
+                    "text": "Водиш състезанието!"
+                },
+                "gained-p2": {
+                    "file": "adam/gained-p2.mp3",
+                    "hash": "63927dcc335a5b55eeb7186a53dabb23e7aa098d",
+                    "text": "Вече си втори."
+                },
+                "gained-p3": {
+                    "file": "adam/gained-p3.mp3",
+                    "hash": "71e9db5b24ca0fd4066bf3b3052dcd250c0af813",
+                    "text": "Вече си трети."
+                },
+                "gained-p4": {
+                    "file": "adam/gained-p4.mp3",
+                    "hash": "d5237e395a395a3f2236a9966c542c127d05611a",
+                    "text": "Вече си четвърти."
+                },
+                "gained-p5": {
+                    "file": "adam/gained-p5.mp3",
+                    "hash": "c52405120bc4273eebba229d9e2d584439d5c487",
+                    "text": "Вече си пети."
+                },
+                "last-lap": {
+                    "file": "adam/last-lap.mp3",
+                    "hash": "a2e3b203699e27d1b615dc2165fe9515e62d8c91",
+                    "text": "Последна обиколка. Давай!"
+                },
+                "lost-p2": {
+                    "file": "adam/lost-p2.mp3",
+                    "hash": "46847644f16035fcda716ad03a84fe03151f9e67",
+                    "text": "Падна на второ място."
+                },
+                "lost-p3": {
+                    "file": "adam/lost-p3.mp3",
+                    "hash": "b4de8de0d282ec9873e20d851e2f20af1547886c",
+                    "text": "Падна на трето място."
+                },
+                "lost-p4": {
+                    "file": "adam/lost-p4.mp3",
+                    "hash": "f86421377dfa353ff51249e397b5a82300fa7495",
+                    "text": "Падна на четвърто място."
+                },
+                "lost-p5": {
+                    "file": "adam/lost-p5.mp3",
+                    "hash": "272d9ae3e12eb701be77e1696a7cf228b26efdd3",
+                    "text": "Падна на пето място."
+                },
+                "lost-p6": {
+                    "file": "adam/lost-p6.mp3",
+                    "hash": "ad1a4cd49f69ad6645fd28c3f2e6c8694ca473dd",
+                    "text": "Падна на последното място."
+                },
+                "penalty-contact": {
+                    "file": "adam/penalty-contact.mp3",
+                    "hash": "ffa67c5e9af1308203ea864c6d3590c039914c6c",
+                    "text": "Наказание пет секунди за удар отзад."
+                },
+                "penalty-track": {
+                    "file": "adam/penalty-track.mp3",
+                    "hash": "2d11cd648af1379ab1fa3868ae8376b112205910",
+                    "text": "Наказание пет секунди. Излезе от пистата."
+                },
+                "rival-ahead": {
+                    "file": "adam/rival-ahead.mp3",
+                    "hash": "5ad9b80849ea432aff309f78101d33cdaf9f237d",
+                    "text": "Изоставаш от съперника си."
+                },
+                "rival-behind": {
+                    "file": "adam/rival-behind.mp3",
+                    "hash": "2ab31657fc781d398aa2f8958aa317a435686265",
+                    "text": "Водиш пред съперника си."
+                }
+            }
+        },
+        "charlie": {
+            "id": "IKne3meq5aSn9XLyUdCD",
+            "clips": {
+                "bot-0-attack": {
+                    "file": "charlie/bot-0-attack.mp3",
+                    "hash": "4174b5d3b08256c52e1f70abc381f9a0d55d1af8",
+                    "text": "Колев е точно зад теб."
+                },
+                "bot-0-mistake": {
+                    "file": "charlie/bot-0-mistake.mp3",
+                    "hash": "dbb6cdf6b0fdc89d96bf00cffeb297e2f72fc1d4",
+                    "text": "Колев изпусна спирането!"
+                },
+                "bot-0-off": {
+                    "file": "charlie/bot-0-off.mp3",
+                    "hash": "e501439dce58a02c8aaf3359d94205b9391c467c",
+                    "text": "Колев излезе от пистата!"
+                },
+                "bot-0-passed": {
+                    "file": "charlie/bot-0-passed.mp3",
+                    "hash": "2ea298a423ef4a8126d5886f63d2e7927ba6980e",
+                    "text": "Изпревари Колев!"
+                },
+                "bot-0-passes": {
+                    "file": "charlie/bot-0-passes.mp3",
+                    "hash": "2646ebb469d1b613711aa26600691f4ccafe0b7e",
+                    "text": "Колев те изпревари."
+                },
+                "bot-0-penalty": {
+                    "file": "charlie/bot-0-penalty.mp3",
+                    "hash": "a1ba01caa56a26111c1d87923fc29a9fd4c7901e",
+                    "text": "Колев получи наказание за удара в теб."
+                },
+                "bot-1-attack": {
+                    "file": "charlie/bot-1-attack.mp3",
+                    "hash": "2e7215e82fa1404bc6738a02126a417fd99cd69f",
+                    "text": "Петров е точно зад теб."
+                },
+                "bot-1-mistake": {
+                    "file": "charlie/bot-1-mistake.mp3",
+                    "hash": "6e6728a1c74496ddb8bffa2ac241e9f0fb93a0ea",
+                    "text": "Петров изпусна спирането!"
+                },
+                "bot-1-off": {
+                    "file": "charlie/bot-1-off.mp3",
+                    "hash": "44bd8c5b299e923167bd1370eb0273b07d38d666",
+                    "text": "Петров излезе от пистата!"
+                },
+                "bot-1-passed": {
+                    "file": "charlie/bot-1-passed.mp3",
+                    "hash": "826e8063533ec8b860d0bd63cedf1f1df3344251",
+                    "text": "Изпревари Петров!"
+                },
+                "bot-1-passes": {
+                    "file": "charlie/bot-1-passes.mp3",
+                    "hash": "75ebdf5288e6032b4883ca3f232161c7f0c7acfe",
+                    "text": "Петров те изпревари."
+                },
+                "bot-1-penalty": {
+                    "file": "charlie/bot-1-penalty.mp3",
+                    "hash": "bbdfef9d3f7b86dbb0cf446263d4327e9e8d729b",
+                    "text": "Петров получи наказание за удара в теб."
+                },
+                "bot-2-attack": {
+                    "file": "charlie/bot-2-attack.mp3",
+                    "hash": "1809ea6bd58589779509809cc712c6f18b646012",
+                    "text": "Илиев е точно зад теб."
+                },
+                "bot-2-mistake": {
+                    "file": "charlie/bot-2-mistake.mp3",
+                    "hash": "a4d234a4e24b172e7f4b5f301382a44b04e4fa9b",
+                    "text": "Илиев изпусна спирането!"
+                },
+                "bot-2-off": {
+                    "file": "charlie/bot-2-off.mp3",
+                    "hash": "89ea4c93dd8c9addb3b2e7a46497b326c78fbb6c",
+                    "text": "Илиев излезе от пистата!"
+                },
+                "bot-2-passed": {
+                    "file": "charlie/bot-2-passed.mp3",
+                    "hash": "a99c23c8046f9980b8bd2bf6728a9dc1f0c84abc",
+                    "text": "Изпревари Илиев!"
+                },
+                "bot-2-passes": {
+                    "file": "charlie/bot-2-passes.mp3",
+                    "hash": "921cb074745ba6330981a8f74a9acbd756f538db",
+                    "text": "Илиев те изпревари."
+                },
+                "bot-2-penalty": {
+                    "file": "charlie/bot-2-penalty.mp3",
+                    "hash": "a3b8c4eacb7b6a6603a88226c919be8083eaab2f",
+                    "text": "Илиев получи наказание за удара в теб."
+                },
+                "bot-3-attack": {
+                    "file": "charlie/bot-3-attack.mp3",
+                    "hash": "1d6762d387bf3cf9badba1bf514cb8c14ebd35c0",
+                    "text": "Стоянов е точно зад теб."
+                },
+                "bot-3-mistake": {
+                    "file": "charlie/bot-3-mistake.mp3",
+                    "hash": "8f15e8ff53aa103bbc1277dea996b2838907fe2e",
+                    "text": "Стоянов изпусна спирането!"
+                },
+                "bot-3-off": {
+                    "file": "charlie/bot-3-off.mp3",
+                    "hash": "7fcc75ce2ef0025144978dcd53d7712ab3593967",
+                    "text": "Стоянов излезе от пистата!"
+                },
+                "bot-3-passed": {
+                    "file": "charlie/bot-3-passed.mp3",
+                    "hash": "89c0d4325832fae9f65700546bf6517236feaee5",
+                    "text": "Изпревари Стоянов!"
+                },
+                "bot-3-passes": {
+                    "file": "charlie/bot-3-passes.mp3",
+                    "hash": "8dae70dce4ee8a5088c361992d2f3222722a4d7e",
+                    "text": "Стоянов те изпревари."
+                },
+                "bot-3-penalty": {
+                    "file": "charlie/bot-3-penalty.mp3",
+                    "hash": "2861d25ba6adee8b6587e5b76f84fe64d8213c2c",
+                    "text": "Стоянов получи наказание за удара в теб."
+                },
+                "bot-4-attack": {
+                    "file": "charlie/bot-4-attack.mp3",
+                    "hash": "e0e2036b8844797bdf92d30d547e73be562c5fc3",
+                    "text": "Радев е точно зад теб."
+                },
+                "bot-4-mistake": {
+                    "file": "charlie/bot-4-mistake.mp3",
+                    "hash": "98c24eab1ceac37542ce3503e83aaa293fe4367e",
+                    "text": "Радев изпусна спирането!"
+                },
+                "bot-4-off": {
+                    "file": "charlie/bot-4-off.mp3",
+                    "hash": "976b1cc3c611e40f680ef214c07cf02ea8bcc1c8",
+                    "text": "Радев излезе от пистата!"
+                },
+                "bot-4-passed": {
+                    "file": "charlie/bot-4-passed.mp3",
+                    "hash": "c50647a27aba8d73669e99aaa24efa27dbc7c5d9",
+                    "text": "Изпревари Радев!"
+                },
+                "bot-4-passes": {
+                    "file": "charlie/bot-4-passes.mp3",
+                    "hash": "6d099b89e7e79801f37ae8207bc3ef33ec48611b",
+                    "text": "Радев те изпревари."
+                },
+                "bot-4-penalty": {
+                    "file": "charlie/bot-4-penalty.mp3",
+                    "hash": "e45589ccff0b434cf0e09910e4bca9ddc0604013",
+                    "text": "Радев получи наказание за удара в теб."
+                },
+                "bot-5-attack": {
+                    "file": "charlie/bot-5-attack.mp3",
+                    "hash": "e5466f62dcc48bd158bfd0c0d6483080bcec0c09",
+                    "text": "Марков е точно зад теб."
+                },
+                "bot-5-mistake": {
+                    "file": "charlie/bot-5-mistake.mp3",
+                    "hash": "d085016ccd5aecafb520c90af4b1c7c9381c465c",
+                    "text": "Марков изпусна спирането!"
+                },
+                "bot-5-off": {
+                    "file": "charlie/bot-5-off.mp3",
+                    "hash": "b8759233963b755756224979548df0c10d16b3ef",
+                    "text": "Марков излезе от пистата!"
+                },
+                "bot-5-passed": {
+                    "file": "charlie/bot-5-passed.mp3",
+                    "hash": "c2bfd54a023b9c83bb3c66f1090cb94da21cf882",
+                    "text": "Изпревари Марков!"
+                },
+                "bot-5-passes": {
+                    "file": "charlie/bot-5-passes.mp3",
+                    "hash": "9996dd1190353f0f1adf411b7be49fa63be2f931",
+                    "text": "Марков те изпревари."
+                },
+                "bot-5-penalty": {
+                    "file": "charlie/bot-5-penalty.mp3",
+                    "hash": "153d96a56b3fabc1664038f76694b66d20349604",
+                    "text": "Марков получи наказание за удара в теб."
+                },
+                "drs": {
+                    "file": "charlie/drs.mp3",
+                    "hash": "856bd7c104059e07376cf080367463ccc9822c7a",
+                    "text": "Ди Ар Ес е наличен. Атакувай!"
+                },
+                "gained-p1": {
+                    "file": "charlie/gained-p1.mp3",
+                    "hash": "f9a55cc02acc34b96d5fe50a0eea26d947878d45",
+                    "text": "Водиш състезанието!"
+                },
+                "gained-p2": {
+                    "file": "charlie/gained-p2.mp3",
+                    "hash": "7994d4d68f67b02cb41bd328a0677a3f1f6d64c2",
+                    "text": "Вече си втори."
+                },
+                "gained-p3": {
+                    "file": "charlie/gained-p3.mp3",
+                    "hash": "3ea8f032487abc795f1b6414668bdb768969c94d",
+                    "text": "Вече си трети."
+                },
+                "gained-p4": {
+                    "file": "charlie/gained-p4.mp3",
+                    "hash": "9220164479b3a6f13cb9a64adbeab39338209ff3",
+                    "text": "Вече си четвърти."
+                },
+                "gained-p5": {
+                    "file": "charlie/gained-p5.mp3",
+                    "hash": "9997033348e0afa87640b1246c6c7b423e5b9e83",
+                    "text": "Вече си пети."
+                },
+                "last-lap": {
+                    "file": "charlie/last-lap.mp3",
+                    "hash": "d62e01fe080533730c28ccc241f4bae1c4f802c0",
+                    "text": "Последна обиколка. Давай!"
+                },
+                "lost-p2": {
+                    "file": "charlie/lost-p2.mp3",
+                    "hash": "3f64b89c59cee6e65bd4aa6d847d971c5ae67e31",
+                    "text": "Падна на второ място."
+                },
+                "lost-p3": {
+                    "file": "charlie/lost-p3.mp3",
+                    "hash": "2c00b128523bfcf821150cc0c57bec3c63502008",
+                    "text": "Падна на трето място."
+                },
+                "lost-p4": {
+                    "file": "charlie/lost-p4.mp3",
+                    "hash": "bc955b0780a93271791708d5f0cccd4e5d83474a",
+                    "text": "Падна на четвърто място."
+                },
+                "lost-p5": {
+                    "file": "charlie/lost-p5.mp3",
+                    "hash": "c74e62b5dfd878158f324c436d75ac84d3715437",
+                    "text": "Падна на пето място."
+                },
+                "lost-p6": {
+                    "file": "charlie/lost-p6.mp3",
+                    "hash": "00c6b10d42e1795d9ac088ee0824fc8d8e018b9d",
+                    "text": "Падна на последното място."
+                },
+                "penalty-contact": {
+                    "file": "charlie/penalty-contact.mp3",
+                    "hash": "c00bf5dcc22b0b4849e049f406b7d59387103550",
+                    "text": "Наказание пет секунди за удар отзад."
+                },
+                "penalty-track": {
+                    "file": "charlie/penalty-track.mp3",
+                    "hash": "7c2b657d714e4f95df225d71a42ab99ca59fd1e8",
+                    "text": "Наказание пет секунди. Излезе от пистата."
+                },
+                "rival-ahead": {
+                    "file": "charlie/rival-ahead.mp3",
+                    "hash": "700258ec65aa1bcf41b5ef93076c2b090e2c918d",
+                    "text": "Изоставаш от съперника си."
+                },
+                "rival-behind": {
+                    "file": "charlie/rival-behind.mp3",
+                    "hash": "aaa351a04175e5baae2296ae844f721da5fba246",
+                    "text": "Водиш пред съперника си."
+                }
+            }
+        },
+        "daniel": {
+            "id": "onwK4e9ZLuTAKqWW03F9",
+            "clips": {
+                "bot-0-attack": {
+                    "file": "daniel/bot-0-attack.mp3",
+                    "hash": "53954dced4913981cd52e8b9e0bf27cd2b332709",
+                    "text": "Колев е точно зад теб."
+                },
+                "bot-0-mistake": {
+                    "file": "daniel/bot-0-mistake.mp3",
+                    "hash": "930290247105dbbc345f1372335605b9e429ca63",
+                    "text": "Колев изпусна спирането!"
+                },
+                "bot-0-off": {
+                    "file": "daniel/bot-0-off.mp3",
+                    "hash": "8e8eb1a9bb3fc62941c4100748d1aa44afeb0b34",
+                    "text": "Колев излезе от пистата!"
+                },
+                "bot-0-passed": {
+                    "file": "daniel/bot-0-passed.mp3",
+                    "hash": "3520368bf41e2ccf7235da4feef46754d339daa7",
+                    "text": "Изпревари Колев!"
+                },
+                "bot-0-passes": {
+                    "file": "daniel/bot-0-passes.mp3",
+                    "hash": "5d708596fea458d3c997d0bda58263fdde007b4c",
+                    "text": "Колев те изпревари."
+                },
+                "bot-0-penalty": {
+                    "file": "daniel/bot-0-penalty.mp3",
+                    "hash": "9957867b0e851c5150058d7a71f832acfa8fa022",
+                    "text": "Колев получи наказание за удара в теб."
+                },
+                "bot-1-attack": {
+                    "file": "daniel/bot-1-attack.mp3",
+                    "hash": "3c63f37249ee5cdb4ad8eeee9073f4847610923a",
+                    "text": "Петров е точно зад теб."
+                },
+                "bot-1-mistake": {
+                    "file": "daniel/bot-1-mistake.mp3",
+                    "hash": "0ccc1f5a07fcb4e9dbb9265d032653af96e1b870",
+                    "text": "Петров изпусна спирането!"
+                },
+                "bot-1-off": {
+                    "file": "daniel/bot-1-off.mp3",
+                    "hash": "09cf2e510462a5bd8acaea2e48d3d781c888b744",
+                    "text": "Петров излезе от пистата!"
+                },
+                "bot-1-passed": {
+                    "file": "daniel/bot-1-passed.mp3",
+                    "hash": "c064c1edf7a8dcbe1fed0e68fd376f63f28240c8",
+                    "text": "Изпревари Петров!"
+                },
+                "bot-1-passes": {
+                    "file": "daniel/bot-1-passes.mp3",
+                    "hash": "f620ccde7c8f2a4791db4cf10f9deb32f24d981b",
+                    "text": "Петров те изпревари."
+                },
+                "bot-1-penalty": {
+                    "file": "daniel/bot-1-penalty.mp3",
+                    "hash": "02180eb3142da7e1edc54102c528da12a2e40191",
+                    "text": "Петров получи наказание за удара в теб."
+                },
+                "bot-2-attack": {
+                    "file": "daniel/bot-2-attack.mp3",
+                    "hash": "4451087381bf485780c8c5d986ac0f6ea8aa6c4c",
+                    "text": "Илиев е точно зад теб."
+                },
+                "bot-2-mistake": {
+                    "file": "daniel/bot-2-mistake.mp3",
+                    "hash": "51173381d3c3ecba48d0543eab78b9a60a0bb51d",
+                    "text": "Илиев изпусна спирането!"
+                },
+                "bot-2-off": {
+                    "file": "daniel/bot-2-off.mp3",
+                    "hash": "add7acaa5d9e8176ba85874414e3f9736c188725",
+                    "text": "Илиев излезе от пистата!"
+                },
+                "bot-2-passed": {
+                    "file": "daniel/bot-2-passed.mp3",
+                    "hash": "05d83a8e1eea8f08ea0fcec8141e407a3389f5c8",
+                    "text": "Изпревари Илиев!"
+                },
+                "bot-2-passes": {
+                    "file": "daniel/bot-2-passes.mp3",
+                    "hash": "c0f677735f340ec957bafd4e6dc967629531970f",
+                    "text": "Илиев те изпревари."
+                },
+                "bot-2-penalty": {
+                    "file": "daniel/bot-2-penalty.mp3",
+                    "hash": "42ef4bdd11d1dc07ada079e9cc2d3d75fce16cfc",
+                    "text": "Илиев получи наказание за удара в теб."
+                },
+                "bot-3-attack": {
+                    "file": "daniel/bot-3-attack.mp3",
+                    "hash": "d98e853edb1773883d7ef2f30c85859289c43ed5",
+                    "text": "Стоянов е точно зад теб."
+                },
+                "bot-3-mistake": {
+                    "file": "daniel/bot-3-mistake.mp3",
+                    "hash": "b6826a7330cd186fc9c2d0e882ab777192a0cef5",
+                    "text": "Стоянов изпусна спирането!"
+                },
+                "bot-3-off": {
+                    "file": "daniel/bot-3-off.mp3",
+                    "hash": "39b756e95d1d7e9d45b262e3ef0c5b312e99f47b",
+                    "text": "Стоянов излезе от пистата!"
+                },
+                "bot-3-passed": {
+                    "file": "daniel/bot-3-passed.mp3",
+                    "hash": "44e7c90ce6bfae3bdd556dc54a97bdb514f4ffe5",
+                    "text": "Изпревари Стоянов!"
+                },
+                "bot-3-passes": {
+                    "file": "daniel/bot-3-passes.mp3",
+                    "hash": "957417ef184c1b8ce38a3cb5de6d1db6b6c25b52",
+                    "text": "Стоянов те изпревари."
+                },
+                "bot-3-penalty": {
+                    "file": "daniel/bot-3-penalty.mp3",
+                    "hash": "182e91dbf42cba244a05c52b95ddd637b54c0d80",
+                    "text": "Стоянов получи наказание за удара в теб."
+                },
+                "bot-4-attack": {
+                    "file": "daniel/bot-4-attack.mp3",
+                    "hash": "eb668bb3a35062169e1cb75deb3c7997a036de82",
+                    "text": "Радев е точно зад теб."
+                },
+                "bot-4-mistake": {
+                    "file": "daniel/bot-4-mistake.mp3",
+                    "hash": "316493dd1c7ef0dc61ff36ccd62e9d20ca5a179a",
+                    "text": "Радев изпусна спирането!"
+                },
+                "bot-4-off": {
+                    "file": "daniel/bot-4-off.mp3",
+                    "hash": "6a5ad3dc1cc858e6a6f3b2a44c2c38fc2b73f0de",
+                    "text": "Радев излезе от пистата!"
+                },
+                "bot-4-passed": {
+                    "file": "daniel/bot-4-passed.mp3",
+                    "hash": "9e2c34f91a9c18cabf9cac3b5510e71eab2ea77b",
+                    "text": "Изпревари Радев!"
+                },
+                "bot-4-passes": {
+                    "file": "daniel/bot-4-passes.mp3",
+                    "hash": "0f30ee03a15a6123d93631cfea9fd7729a623903",
+                    "text": "Радев те изпревари."
+                },
+                "bot-4-penalty": {
+                    "file": "daniel/bot-4-penalty.mp3",
+                    "hash": "fd28108643e0bf53911b8da9c1004383d1b759bd",
+                    "text": "Радев получи наказание за удара в теб."
+                },
+                "bot-5-attack": {
+                    "file": "daniel/bot-5-attack.mp3",
+                    "hash": "c34954a58e32d7d03df74a33f8669277ee66b2a4",
+                    "text": "Марков е точно зад теб."
+                },
+                "bot-5-mistake": {
+                    "file": "daniel/bot-5-mistake.mp3",
+                    "hash": "36e9f0d0cdc3cbdc4d86376babd833245191dd26",
+                    "text": "Марков изпусна спирането!"
+                },
+                "bot-5-off": {
+                    "file": "daniel/bot-5-off.mp3",
+                    "hash": "41fe7ca2432cb286a2b3e887ff5e9b7c7302571d",
+                    "text": "Марков излезе от пистата!"
+                },
+                "bot-5-passed": {
+                    "file": "daniel/bot-5-passed.mp3",
+                    "hash": "aab352f6c10a86ea7d3f66f7ff52e948cf8a0a0b",
+                    "text": "Изпревари Марков!"
+                },
+                "bot-5-passes": {
+                    "file": "daniel/bot-5-passes.mp3",
+                    "hash": "b8ba8b9d853043349a5169a23f5a5da033056552",
+                    "text": "Марков те изпревари."
+                },
+                "bot-5-penalty": {
+                    "file": "daniel/bot-5-penalty.mp3",
+                    "hash": "1ca29f4ac8b9a36ebfd17f5e078bf4e6f8d2f4ab",
+                    "text": "Марков получи наказание за удара в теб."
+                },
+                "drs": {
+                    "file": "daniel/drs.mp3",
+                    "hash": "cfb8d1c2dd772de17a9994d61b1872c64ae835c8",
+                    "text": "Ди Ар Ес е наличен. Атакувай!"
+                },
+                "gained-p1": {
+                    "file": "daniel/gained-p1.mp3",
+                    "hash": "12263f2835a6674ab9ddd2b6fb702d9873884a9b",
+                    "text": "Водиш състезанието!"
+                },
+                "gained-p2": {
+                    "file": "daniel/gained-p2.mp3",
+                    "hash": "f8de79f151485ab7d7d97520ddadf8cdad08da97",
+                    "text": "Вече си втори."
+                },
+                "gained-p3": {
+                    "file": "daniel/gained-p3.mp3",
+                    "hash": "68ba8138a857114dac05a2e35327a81dbbde7ca8",
+                    "text": "Вече си трети."
+                },
+                "gained-p4": {
+                    "file": "daniel/gained-p4.mp3",
+                    "hash": "d9819a31514321727019709263462cfcfd5204f7",
+                    "text": "Вече си четвърти."
+                },
+                "gained-p5": {
+                    "file": "daniel/gained-p5.mp3",
+                    "hash": "d3983dfe282f91528577808a23fbaf227f9251c9",
+                    "text": "Вече си пети."
+                },
+                "last-lap": {
+                    "file": "daniel/last-lap.mp3",
+                    "hash": "11d8f0c89aa1dd56e67282d900bdc2981dc11e29",
+                    "text": "Последна обиколка. Давай!"
+                },
+                "lost-p2": {
+                    "file": "daniel/lost-p2.mp3",
+                    "hash": "151810525d4bf9f4fda590abfc98b50048260047",
+                    "text": "Падна на второ място."
+                },
+                "lost-p3": {
+                    "file": "daniel/lost-p3.mp3",
+                    "hash": "0a5dac2f23b2a8e5cd71bfcdcc7424d70a89b30d",
+                    "text": "Падна на трето място."
+                },
+                "lost-p4": {
+                    "file": "daniel/lost-p4.mp3",
+                    "hash": "294cbe8f2a4068ab54f3dcb2dc7c493d0229dda1",
+                    "text": "Падна на четвърто място."
+                },
+                "lost-p5": {
+                    "file": "daniel/lost-p5.mp3",
+                    "hash": "176151130cd9aaa5da0533636c88248c42413310",
+                    "text": "Падна на пето място."
+                },
+                "lost-p6": {
+                    "file": "daniel/lost-p6.mp3",
+                    "hash": "ee21860127d52a0908e3c64784eff75f18ba6b20",
+                    "text": "Падна на последното място."
+                },
+                "penalty-contact": {
+                    "file": "daniel/penalty-contact.mp3",
+                    "hash": "730882184e9123965da412e1a98fe7fa88589c15",
+                    "text": "Наказание пет секунди за удар отзад."
+                },
+                "penalty-track": {
+                    "file": "daniel/penalty-track.mp3",
+                    "hash": "6a98c11084d470a315f1e70ea97bbe95a22f320b",
+                    "text": "Наказание пет секунди. Излезе от пистата."
+                },
+                "rival-ahead": {
+                    "file": "daniel/rival-ahead.mp3",
+                    "hash": "7de8e4429547e2de736e090ffbd7b0c5021441f9",
+                    "text": "Изоставаш от съперника си."
+                },
+                "rival-behind": {
+                    "file": "daniel/rival-behind.mp3",
+                    "hash": "2ed5a78eba3e13e6143ac191a39755f7be7ec1a6",
+                    "text": "Водиш пред съперника си."
+                }
+            }
+        }
+    }
+}

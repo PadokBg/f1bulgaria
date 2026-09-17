@@ -215,6 +215,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     motionBlur: true,
     weather: 'dry',
     compactHud: false,
+    radioVoice: true,
 });
 const settings = ref({ ...DEFAULT_SETTINGS });
 
@@ -244,6 +245,7 @@ const isValidSetting = (key, value) => {
         case 'muted':
         case 'motionBlur':
         case 'compactHud':
+        case 'radioVoice':
             return typeof value === 'boolean';
         case 'volume':
             return typeof value === 'number' && value >= 0 && value <= 1;
@@ -376,6 +378,15 @@ const applyVolume = (instance, value) => {
     } else {
         instance.sound?.setVolume?.(value);
     }
+};
+
+const applyRadioVoice = (instance = game.value) => {
+    instance?.setRadioVoice?.(settings.value.radioVoice);
+};
+
+const toggleRadioVoice = () => {
+    settings.value.radioVoice = !settings.value.radioVoice;
+    applyRadioVoice();
 };
 
 const applyCamera = (instance = game.value) => {
@@ -1625,6 +1636,7 @@ const startGame = async (track, rivalUserId = null, raceRivalUserId = null) => {
         trackOutline.value = instance.minimap?.path ?? null;
         applyQuality(instance);
         applyWeather(instance);
+        applyRadioVoice(instance);
         // Мобилният контейнер е fixed inset-0 — платното трябва да се
         // премери спрямо него, не спрямо първоначалния layout.
         nextTick(() => {
@@ -2927,7 +2939,7 @@ const recenterTilt = () => {
 
                     <!-- ODbL иска източникът да се вижда там, където се вижда и картата. -->
                     <div class="pointer-events-none absolute bottom-0 left-0 hidden p-2 text-[11px] text-white/35 sm:block">
-                        Трасе © OpenStreetMap contributors · височини OpenTopoData
+                        Трасе © OpenStreetMap contributors · височини OpenTopoData<template v-if="telemetry.tower && settings.radioVoice"> · глас elevenlabs.io</template>
                     </div>
 
                     <!-- Скорост + предавка + оборотомер + педали. Телефон: горе
@@ -3141,6 +3153,16 @@ const recenterTilt = () => {
                             @click="toggleMotionBlur"
                         >
                             Blur
+                        </button>
+                        <button
+                            type="button"
+                            class="rounded px-2 py-1 text-[11px] font-semibold uppercase tracking-wider transition"
+                            :class="settings.radioVoice ? 'bg-white/15 text-white' : 'text-zinc-400 hover:text-white'"
+                            :aria-pressed="String(settings.radioVoice)"
+                            title="Глас по радиото"
+                            @click="toggleRadioVoice"
+                        >
+                            Радио
                         </button>
                         <button
                             type="button"
@@ -3373,6 +3395,15 @@ const recenterTilt = () => {
                                     светлините гаснат и потегляте, с истински контакт между колите.
                                     Общото време отива в класацията „Състезание" — +{{ RACE_PENALTY_SECONDS }} s за всяко излизане от пистата.
                                 </p>
+                                <label v-if="rivals === 'race'" class="mt-2 flex items-center gap-2 text-[11px] text-zinc-300">
+                                    <input
+                                        type="checkbox"
+                                        class="rounded border-zinc-600 bg-zinc-800 text-[#e10600] focus:ring-[#e10600]"
+                                        :checked="settings.radioVoice"
+                                        @change="toggleRadioVoice"
+                                    />
+                                    Глас по радиото (глас: elevenlabs.io)
+                                </label>
                             </div>
 
                             <!-- Телефон: избор как се завива; педалите са винаги явни. -->

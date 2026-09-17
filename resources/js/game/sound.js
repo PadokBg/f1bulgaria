@@ -190,6 +190,32 @@ function setP(param, value, tau, t) {
  * @param {AudioParam} param
  * @param {number} t
  */
+/** Радиото: пращенето преди гласа, s; сила на гласа в микса; двигателят под него. */
+const RADIO_SQUELCH_LEAD = 0.08;
+const RADIO_LEVEL = 1.6;
+const RADIO_ENGINE_DUCK = 0.45;
+
+let radioCurveCache = null;
+
+/**
+ * Мека сатурация (tanh-подобна, рационална) — „пробитият" звук на отборното
+ * радио. Кешира се: кривата е еднаква за всеки клип.
+ *
+ * @returns {Float32Array}
+ */
+function radioCurve() {
+    if (radioCurveCache === null) {
+        const samples = 1024;
+        radioCurveCache = new Float32Array(samples);
+        for (let i = 0; i < samples; i++) {
+            const x = ((i / (samples - 1)) * 2 - 1) * 2.2;
+            radioCurveCache[i] = x / (1 + Math.abs(x));
+        }
+    }
+
+    return radioCurveCache;
+}
+
 function holdParam(param, t) {
     if (typeof param.cancelAndHoldAtTime === 'function') {
         param.cancelAndHoldAtTime(t);
@@ -1308,6 +1334,83 @@ export function createEngineSound(options = {}) {
          * @param {number} freq
          * @param {number} [duration]
          */
+        /**
+         * Декодира гласов клип в контекста на играта. null без Web Audio или
+         * при повреден файл — радиото тогава остава само текстово.
+         *
+         * @param {ArrayBuffer} data
+         * @returns {Promise<AudioBuffer|null>}
+         */
+        async decodeClip(data) {
+            if (!ctx) {
+                return null;
+            }
+            try {
+                return await ctx.decodeAudioData(data);
+            } catch {
+                return null;
+            }
+        },
+
+        /**
+         * Гласов клип „по радиото": тесен честотен диапазон като на
+         * отборното радио, леко изкривяване, пращене преди и след и приглушен
+         * двигател отдолу. Минава през микса, така че mute и силата важат.
+         * Резолва се, когато клипът свърши (веднага, ако звукът е спрян).
+         *
+         * @param {AudioBuffer} buffer
+         * @returns {Promise<void>}
+         */
+        playRadio(buffer) {
+            if (!ready() || !buffer) {
+                return Promise.resolve();
+            }
+
+            const start = ctx.currentTime + RADIO_SQUELCH_LEAD;
+            const end = start + buffer.duration;
+
+            noiseBurst(2600, 'bandpass', 0.09, 0.05, 0, 0.9);
+            noiseBurst(2600, 'bandpass', 0.07, 0.04, end - ctx.currentTime + 0.02, 0.9);
+
+            const source = ctx.createBufferSource();
+            source.buffer = buffer;
+            const highpass = ctx.createBiquadFilter();
+            highpass.type = 'highpass';
+            highpass.frequency.value = 380;
+            const lowpass = ctx.createBiquadFilter();
+            lowpass.type = 'lowpass';
+            lowpass.frequency.value = 3200;
+            const shaper = ctx.createWaveShaper();
+            shaper.curve = radioCurve();
+            const level = ctx.createGain();
+            level.gain.value = RADIO_LEVEL;
+
+            source.connect(highpass);
+            highpass.connect(lowpass);
+            lowpass.connect(shaper);
+            shaper.connect(level);
+            level.connect(nodes.mix);
+
+            // Двигателят отстъпва на гласа, после се връща.
+            const duck = nodes.engineDuck.gain;
+            holdParam(duck, ctx.currentTime);
+            duck.linearRampToValueAtTime(RADIO_ENGINE_DUCK, start);
+            duck.setTargetAtTime(1, end, 0.12);
+
+            source.start(start);
+
+            return new Promise((resolve) => {
+                source.onended = () => {
+                    source.disconnect();
+                    highpass.disconnect();
+                    lowpass.disconnect();
+                    shaper.disconnect();
+                    level.disconnect();
+                    resolve();
+                };
+            });
+        },
+
         beep(freq, duration = 0.09) {
             oneShotTone('square', freq, duration, 0.12);
         },

@@ -63,6 +63,7 @@ import {
     stepRace,
     trackWrap,
 } from './race.js';
+import { createRadioVoice } from './radioVoice.js';
 import { hashString, mulberry32 } from './random.js';
 import { createEngineSound } from './sound.js';
 import { isMobileDevice } from './device.js';
@@ -584,6 +585,10 @@ export class Game {
         // полупрозрачна кола без контакт (виж setRaceRival).
         this.raceRival = null;
         this.radio = createRadioState();
+        // Гласът на радиото: генерирани клипове през радио филтъра на звука.
+        // Без клипове (не са генерирани) радиото остава само текстово.
+        this.radioVoice = createRadioVoice(this.sound);
+        this.radioVoiceEnabled = true;
 
         // Соло резултатният екран пада симетрично на подиума: вътрешен reset
         // (R / „Рестарт" по време на реплей) чисти и Vue състоянието през това.
@@ -856,6 +861,8 @@ export class Game {
         this.onResultClear();
         if (this.race) {
             gridRace(this.race);
+            // Ново състезание — нов инженер по радиото.
+            void this.radioVoice.startRace();
         }
         this.#gridOpponents();
         this.#gridPlayer();
@@ -932,6 +939,20 @@ export class Game {
     }
 
     /**
+     * Гласът на радиото вкл/изкл (настройка на играча). Текстът остава винаги.
+     *
+     * @param {boolean} enabled
+     */
+    setRadioVoice(enabled) {
+        this.radioVoiceEnabled = enabled;
+        this.radioVoice.setEnabled(enabled);
+        // Включен по средата на състезание: инженер, ако още няма избран.
+        if (enabled && this.race && this.radioVoice.voice() === null) {
+            void this.radioVoice.startRace();
+        }
+    }
+
+    /**
      * Конфигурира AI съперниците (вика се от pre-start екрана, преди start()).
      *
      * В състезание колите СЕ БЛЪСКАТ (collisions.js) — и играчът. Полето е
@@ -951,6 +972,8 @@ export class Game {
         // Полето + решетката: симулациите и параметрите на ботовете идват от
         // race.js (детерминирано по пистата); тук им се закачат ригове.
         this.race = createRace(this.sim, count);
+        // Инженерът за това състезание (случаен глас) + изтеглени клипове.
+        void this.radioVoice.startRace();
         this.opponents = this.race.opponents;
 
         // Геометрията на болида е идентична за всички ботове — първият риг я
@@ -2335,6 +2358,7 @@ export class Game {
         this.playerRace = this.race ? this.race.playerLaps : { laps: 0, lastProgress: this.sim.lastProgress };
         this.outLapReported = false;
         this.radio = createRadioState();
+        this.radioVoice.clear();
         this.#resetRaceRivalTiming();
     }
 
@@ -2395,21 +2419,27 @@ export class Game {
     }
 
     /**
-     * Радиото: кратко съобщение + сигнал. Наказанията минават винаги,
+     * Радиото: кратко съобщение + глас (или сигнал, ако гласът е изключен
+     * или клиповете не са генерирани). Наказанията минават винаги,
      * останалото — най-много едно на RADIO_GAP_TICKS.
      *
-     * @param {string} text
+     * @param {string} text Текстът на екрана (с точните секунди)
      * @param {'info'|'good'|'bad'} tone
      * @param {boolean} [priority]
+     * @param {string[]} [voice] Клиповете от radioPhrases.json, по ред
      */
-    #say(text, tone, priority = false) {
+    #say(text, tone, priority = false, voice = []) {
         const clock = this.race?.clock ?? 0;
         if (!priority && clock - this.radio.lastSaid < RADIO_GAP_TICKS) {
             return;
         }
         this.radio.lastSaid = clock;
         this.radio.sequence++;
-        this.sound.beep(tone === 'bad' ? 560 : 1320, 0.05);
+        if (this.radioVoiceEnabled && voice.length > 0 && this.radioVoice.available()) {
+            this.radioVoice.say(voice, priority);
+        } else {
+            this.sound.beep(tone === 'bad' ? 560 : 1320, 0.05);
+        }
         this.#notify(this.onRaceMessage, { id: this.radio.sequence, text, tone });
     }
 
@@ -2418,24 +2448,32 @@ export class Game {
         const race = this.race;
         const me = race.playerLaps;
         const name = (entry) => BOT_NAMES[entry.opponentIndex % BOT_NAMES.length];
+        const clip = (entry, phrase) => `bot-${entry.opponentIndex % BOT_NAMES.length}-${phrase}`;
 
         if (event.type === 'penalty' && event.entry === me) {
+            const contact = event.reason === 'contact';
             this.#say(
-                event.reason === 'contact' ? 'Наказание +5 s — удар отзад' : 'Наказание +5 s — излизане от пистата',
+                contact ? 'Наказание +5 s — удар отзад' : 'Наказание +5 s — излизане от пистата',
                 'bad',
-                true
+                true,
+                [contact ? 'penalty-contact' : 'penalty-track']
             );
         } else if (event.type === 'penalty' && event.reason === 'contact' && event.victim === me) {
-            this.#say(`${name(event.entry)} получи +5 s за удара в теб`, 'good', true);
+            this.#say(`${name(event.entry)} получи +5 s за удара в теб`, 'good', true, [clip(event.entry, 'penalty')]);
         } else if (event.type === 'mistake' && race.result === null) {
             let along = event.entry.sim.lastProgress - me.lastProgress;
             if (along < -0.5) along += 1;
             if (along > 0.5) along -= 1;
             if (Math.abs(along * this.track.length) <= RADIO_MISTAKE_RANGE) {
-                this.#say(event.big ? `${name(event.entry)} излезе от пистата!` : `${name(event.entry)} изпусна спирането`, 'info');
+                this.#say(
+                    event.big ? `${name(event.entry)} излезе от пистата!` : `${name(event.entry)} изпусна спирането`,
+                    'info',
+                    false,
+                    [clip(event.entry, event.big ? 'off' : 'mistake')]
+                );
             }
         } else if (event.type === 'drs' && event.entry === me && event.state === 'available') {
-            this.#say('DRS е наличен', 'good');
+            this.#say('DRS е наличен', 'good', false, ['drs']);
         }
     }
 
@@ -2465,9 +2503,14 @@ export class Game {
                 const gained = position < radio.position;
                 const other = field[gained ? mine + 1 : mine - 1];
                 if (other?.name) {
+                    const bot = other.entry.opponentIndex % BOT_NAMES.length;
                     this.#say(
                         gained ? `П${position}! Изпревари ${other.name}` : `${other.name} те изпревари — П${position}`,
-                        gained ? 'good' : 'bad'
+                        gained ? 'good' : 'bad',
+                        false,
+                        gained
+                            ? [`bot-${bot}-passed`, `gained-p${position}`]
+                            : [`bot-${bot}-passes`, `lost-p${position}`]
                     );
                 }
                 radio.position = position;
@@ -2479,7 +2522,7 @@ export class Game {
 
         if (!radio.lastLapSaid && me.laps === RACE_TOTAL_LAPS) {
             radio.lastLapSaid = true;
-            this.#say('Последна обиколка!', 'info', true);
+            this.#say('Последна обиколка!', 'info', true, ['last-lap']);
         }
 
         const behind = field[mine + 1];
@@ -2489,7 +2532,9 @@ export class Game {
             const lastWarned = radio.attackSaid.get(behind.name) ?? -Infinity;
             if (seconds !== null && seconds <= RADIO_ATTACK_GAP && race.clock - lastWarned >= RADIO_ATTACK_COOLDOWN_TICKS) {
                 radio.attackSaid.set(behind.name, race.clock);
-                this.#say(`${behind.name} е на ${seconds.toFixed(1)} s зад теб`, 'info');
+                this.#say(`${behind.name} е на ${seconds.toFixed(1)} s зад теб`, 'info', false, [
+                    `bot-${behind.entry.opponentIndex % BOT_NAMES.length}-attack`,
+                ]);
             }
         }
 
@@ -2502,7 +2547,9 @@ export class Game {
                 const seconds = (gap.ticks * FIXED_DT).toFixed(1);
                 this.#say(
                     rivalAhead ? `Спрямо ${this.raceRival.name}: +${seconds} s` : `Спрямо ${this.raceRival.name}: −${seconds} s`,
-                    rivalAhead ? 'bad' : 'good'
+                    rivalAhead ? 'bad' : 'good',
+                    false,
+                    [rivalAhead ? 'rival-ahead' : 'rival-behind']
                 );
             }
         }
