@@ -7,6 +7,7 @@ import { lookFor } from '@/game/circuits.js';
 import { isMobileDevice } from '@/game/device.js';
 import { createSessionTracker, sendSessionEvents, sessionDeviceContext } from '@/game/sessionTracker.js';
 import { formatDelta, formatGap, formatLapTime, formatSeconds, splitDurations } from '@/game/format.js';
+import { createTouchControls, liveTouchControls } from '@/game/touchControls.js';
 import { Head, usePage } from '@inertiajs/vue3';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 
@@ -2222,24 +2223,21 @@ onBeforeUnmount(() => {
 
 // ── Управление на телефон: волан + отделни газ и спирачка ─────────────────
 const setInput = (values) => game.value?.setTouchInput(values);
-const touchPointers = {
-    left: new Set(),
-    right: new Set(),
-    throttle: new Set(),
-    brake: new Set(),
-};
 
-// Set по контрол пази правилно мулти-тъч: пускането на единия палец не нулира
-// другия. Pointer capture гарантира pointerup/cancel дори извън бутона.
+// Пръстите по бутон пазят правилно мулти-тъч: пускането на единия палец не
+// нулира другия. Pointer capture доставя pointerup/cancel дори извън бутона,
+// а изгубен pointerup (iOS) се хваща от мрежата по-долу — виж touchControls.js.
+const touchControls = createTouchControls();
+
 const applyTouchControls = () => {
     const values = {
-        throttle: touchPointers.throttle.size > 0 ? 1 : 0,
-        brake: touchPointers.brake.size > 0 ? 1 : 0,
+        throttle: touchControls.isHeld('throttle') ? 1 : 0,
+        brake: touchControls.isHeld('brake') ? 1 : 0,
     };
     if (controlMode.value === 'buttons') {
         values.steer =
-            (touchPointers.right.size > 0 ? 1 : 0) -
-            (touchPointers.left.size > 0 ? 1 : 0);
+            (touchControls.isHeld('right') ? 1 : 0) -
+            (touchControls.isHeld('left') ? 1 : 0);
     }
     setInput(values);
 };
@@ -2248,7 +2246,7 @@ const holdTouchControl = (event, control) => {
     if (event.pointerType === 'mouse' && event.button !== 0) {
         return;
     }
-    touchPointers[control].add(event.pointerId);
+    touchControls.hold(control, event.pointerId, event.pointerType);
     try {
         event.currentTarget?.setPointerCapture?.(event.pointerId);
     } catch {
@@ -2258,7 +2256,7 @@ const holdTouchControl = (event, control) => {
 };
 
 const releaseTouchControl = (event, control) => {
-    touchPointers[control].delete(event.pointerId);
+    touchControls.release(control, event.pointerId);
     if (event.type !== 'lostpointercapture') {
         try {
             if (event.currentTarget?.hasPointerCapture?.(event.pointerId)) {
@@ -2272,11 +2270,28 @@ const releaseTouchControl = (event, control) => {
 };
 
 const releaseAllTouchControls = () => {
-    for (const pointers of Object.values(touchPointers)) {
-        pointers.clear();
-    }
+    touchControls.releaseAll();
     setInput({ steer: 0, throttle: 0, brake: 0 });
 };
+
+// Мрежата срещу „залепнал" бутон. Слушаме на window в capture фазата, за да
+// видим събитието, дори бутонът да е откачен от DOM или да не го е получил.
+// pointerup/cancel: пръстът е вдигнат, където и да е паднало събитието.
+// touch*: event.touches е пълният списък пръсти на екрана — бутон без жив
+// пръст върху него е отпуснат, а без никакви пръсти волан няма.
+const onWindowPointerEnd = (event) => {
+    if (touchControls.releasePointer(event.pointerId)) {
+        applyTouchControls();
+    }
+};
+
+const onWindowTouchChange = (event) => {
+    if (touchControls.reconcile(liveTouchControls(event.touches))) {
+        applyTouchControls();
+    }
+};
+
+const touchSafetyNetOptions = { capture: true, passive: true };
 
 const selectControlMode = (mode) => {
     releaseAllTouchControls();
@@ -2340,12 +2355,22 @@ onMounted(() => {
     window.addEventListener('orientationchange', onMobileOrientationChange);
     window.addEventListener('blur', releaseAllTouchControls);
     document.addEventListener('visibilitychange', onMobileVisibilityChange);
+    window.addEventListener('pointerup', onWindowPointerEnd, touchSafetyNetOptions);
+    window.addEventListener('pointercancel', onWindowPointerEnd, touchSafetyNetOptions);
+    for (const type of ['touchstart', 'touchend', 'touchcancel']) {
+        window.addEventListener(type, onWindowTouchChange, touchSafetyNetOptions);
+    }
 });
 
 onBeforeUnmount(() => {
     window.removeEventListener('orientationchange', onMobileOrientationChange);
     window.removeEventListener('blur', releaseAllTouchControls);
     document.removeEventListener('visibilitychange', onMobileVisibilityChange);
+    window.removeEventListener('pointerup', onWindowPointerEnd, touchSafetyNetOptions);
+    window.removeEventListener('pointercancel', onWindowPointerEnd, touchSafetyNetOptions);
+    for (const type of ['touchstart', 'touchend', 'touchcancel']) {
+        window.removeEventListener(type, onWindowTouchChange, touchSafetyNetOptions);
+    }
 });
 
 // Аналогов волан от накланянето, устойчив на портрет/пейзаж. Проектираме наклона
@@ -3291,6 +3316,7 @@ const recenterTilt = () => {
                                 type="button"
                                 class="mobile-control-button pointer-events-auto touch-none rounded-2xl border border-white/20 bg-black/65 text-2xl font-black text-white active:border-white/50 active:bg-white/25"
                                 aria-label="Завий наляво"
+                                data-touch-control="left"
                                 @pointerdown.prevent="holdTouchControl($event, 'left')"
                                 @pointerup.prevent="releaseTouchControl($event, 'left')"
                                 @pointerleave.prevent="releaseTouchControl($event, 'left')"
@@ -3305,6 +3331,7 @@ const recenterTilt = () => {
                                 type="button"
                                 class="mobile-control-button pointer-events-auto touch-none rounded-2xl border border-white/20 bg-black/65 text-2xl font-black text-white active:border-white/50 active:bg-white/25"
                                 aria-label="Завий надясно"
+                                data-touch-control="right"
                                 @pointerdown.prevent="holdTouchControl($event, 'right')"
                                 @pointerup.prevent="releaseTouchControl($event, 'right')"
                                 @pointerleave.prevent="releaseTouchControl($event, 'right')"
@@ -3321,6 +3348,7 @@ const recenterTilt = () => {
                                 type="button"
                                 class="mobile-pedal-button pointer-events-auto touch-none rounded-2xl border border-red-300/35 bg-red-950/75 text-sm font-black uppercase tracking-wider text-red-50 active:border-red-200 active:bg-red-700/80"
                                 aria-label="Спирачка"
+                                data-touch-control="brake"
                                 @pointerdown.prevent="holdTouchControl($event, 'brake')"
                                 @pointerup.prevent="releaseTouchControl($event, 'brake')"
                                 @pointerleave.prevent="releaseTouchControl($event, 'brake')"
@@ -3335,6 +3363,7 @@ const recenterTilt = () => {
                                 type="button"
                                 class="mobile-pedal-button pointer-events-auto touch-none rounded-2xl border border-emerald-300/35 bg-emerald-950/75 text-sm font-black uppercase tracking-wider text-emerald-50 active:border-emerald-200 active:bg-emerald-700/80"
                                 aria-label="Газ"
+                                data-touch-control="throttle"
                                 @pointerdown.prevent="holdTouchControl($event, 'throttle')"
                                 @pointerup.prevent="releaseTouchControl($event, 'throttle')"
                                 @pointerleave.prevent="releaseTouchControl($event, 'throttle')"
