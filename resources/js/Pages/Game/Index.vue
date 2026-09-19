@@ -196,7 +196,12 @@ const preStart = ref(false); // pre-start екран (избор трансми�
 const isMobile = ref(false); // телефон/тъч → landscape сцена + екранни педали
 const mobileDriving = ref(false); // landscape ограничението важи едва след „Карай"
 const mobilePortrait = ref(false);
-const mobileLandscapeBlocked = computed(() =>
+// Портретен viewport по време на каране: сцената и диалозите се завъртат на 90°
+// с CSS вместо пауза „завърти телефона". При заключена ротация телефонът в
+// ръката е пейзажен, а браузърът остава портретен — паузата никога не падаше
+// (прод, 09.2026: двама играчи се отказаха на нея). Без заключване ОС-ът
+// завърта viewport-а, пейзажът става истински и завъртането изчезва само.
+const forcedLandscape = computed(() =>
     isMobile.value && mobileDriving.value && mobilePortrait.value
 );
 let mobilePresentationRun = 0;
@@ -1900,7 +1905,6 @@ const requestMobileLandscape = (instance) => {
 const leaveMobilePresentation = () => {
     mobilePresentationRun += 1;
     mobileDriving.value = false;
-    mobileOrientationPaused = false;
     releaseAllTouchControls();
     try {
         document.exitFullscreen?.().catch(() => {});
@@ -2308,26 +2312,22 @@ const isPortraitViewport = () => {
     }
 };
 
-let mobileOrientationPaused = false;
 const syncMobileOrientation = () => {
     const portrait = isPortraitViewport();
-    mobilePortrait.value = portrait;
-
-    const instance = game.value;
-    if (!isMobile.value || !mobileDriving.value || !instance) {
-        return;
-    }
-    if (portrait) {
+    // Смяната пренарежда бутоните под пръстите — задържан „Газ" би останал
+    // натиснат, без палецът вече да е върху него.
+    if (portrait !== mobilePortrait.value && isMobile.value && mobileDriving.value) {
         releaseAllTouchControls();
-        mobileOrientationPaused = true;
-        instance.pause?.();
-    } else if (mobileOrientationPaused) {
-        mobileOrientationPaused = false;
-        if (!document.hidden) {
-            instance.resume?.();
-        }
     }
+    mobilePortrait.value = portrait;
 };
+
+// Класът на слоя се сменя при следващия render — canvas-ът се мери след него,
+// иначе resize() чете размера отпреди завъртането.
+watch(forcedLandscape, () => {
+    tiltNeutral = null;
+    nextTick(() => game.value?.resize());
+});
 
 const onMobileOrientationChange = () => {
     syncMobileOrientation();
@@ -2396,7 +2396,7 @@ const orientationAngle = () => {
 
 const onTilt = (event) => {
     if (
-        !mobileDriving.value || mobilePortrait.value || controlMode.value !== 'tilt' ||
+        !mobileDriving.value || controlMode.value !== 'tilt' ||
         event.gamma === null || event.gamma === undefined ||
         event.beta === null || event.beta === undefined
     ) {
@@ -2407,8 +2407,11 @@ const onTilt = (event) => {
         tiltFallbackTimer = null;
     }
     // Наклонът на екрана = проекция на (gamma, beta) върху хоризонталната ос,
-    // завъртяна с ориентацията: портрет → gamma, пейзаж → ±beta.
-    const rad = (orientationAngle() * Math.PI) / 180;
+    // завъртяна с ориентацията: портрет → gamma, пейзаж → ±beta. Завъртяната
+    // с CSS сцена (rotate 90° по часовника) се държи като landscape-primary:
+    // горният край на телефона вляво, т.е. ъгъл 90 при портретен ОС.
+    const angle = forcedLandscape.value ? 90 : orientationAngle();
+    const rad = (angle * Math.PI) / 180;
     const tilt = event.gamma * Math.cos(rad) + event.beta * Math.sin(rad);
 
     if (tiltNeutral === null) {
@@ -2760,15 +2763,24 @@ const recenterTilt = () => {
             ref="gameStage"
             tabindex="-1"
             class="game-stage relative outline-none"
-            :class="isMobile ? 'game-stage-mobile h-[100dvh]' : '-my-8 h-[var(--game-available-height,calc(100dvh-3.75rem))]'"
+            :class="[
+                isMobile ? 'game-stage-mobile h-[100dvh]' : '-my-8 h-[var(--game-available-height,calc(100dvh-3.75rem))]',
+                { 'game-stage-forced': forcedLandscape },
+            ]"
         >
             <!-- dvh: на iOS Safari 100vh включва скритата toolbar лента и
                  бутонът „Спирачка" попадаше под browser chrome-а.
                  Телефон: fixed над sticky хедъра (z-30) — iOS няма елементен
                  fullscreen, а 4rem хедър + min-h принуждаваха скрол в пейзаж. -->
             <div
-                class="h-full w-full overflow-hidden bg-zinc-950"
-                :class="isMobile ? 'fixed inset-0 z-40 h-[100dvh]' : 'relative'"
+                class="overflow-hidden bg-zinc-950"
+                :class="
+                    !isMobile
+                        ? 'relative h-full w-full'
+                        : forcedLandscape
+                          ? 'forced-landscape z-40'
+                          : 'fixed inset-0 z-40 h-[100dvh] w-full'
+                "
             >
                 <canvas ref="canvas" class="block h-full w-full touch-none"></canvas>
 
@@ -3293,9 +3305,9 @@ const recenterTilt = () => {
 
                 <!-- Телефон: ляв палец завива, десният държи газ/спирачка.
                      Накланянето може да замести само волана. Контролите се
-                     крият в ТВ реплей и portrait gate-ът стои над тях. -->
+                     крият в ТВ реплей. -->
                 <div
-                    v-if="isMobile && mobileDriving && !mobileLandscapeBlocked && !replaying"
+                    v-if="isMobile && mobileDriving && !replaying"
                     class="mobile-controls pointer-events-none absolute inset-x-0 bottom-0 z-20 select-none"
                 >
                     <div class="flex items-end justify-between gap-4">
@@ -3381,35 +3393,6 @@ const recenterTilt = () => {
                     </p>
                 </div>
 
-                <!-- Screen Orientation API не работи навсякъде (особено iOS).
-                     Затова реалният размер на viewport-а остава източникът на
-                     истина: portrait паузира играта и поема всички докосвания. -->
-                <div
-                    v-if="mobileLandscapeBlocked"
-                    class="absolute inset-0 z-[70] flex items-center justify-center bg-zinc-950/95 px-8 text-center"
-                    role="alert"
-                    aria-labelledby="rotate-phone-title"
-                >
-                    <div class="max-w-sm">
-                        <div class="mx-auto mb-5 flex h-20 w-12 items-center justify-center rounded-xl border-2 border-zinc-400 text-3xl text-white" aria-hidden="true">
-                            ↻
-                        </div>
-                        <h2 id="rotate-phone-title" class="font-display text-xl font-black uppercase tracking-wider text-white">
-                            Завърти телефона хоризонтално
-                        </h2>
-                        <p class="mt-2 text-sm leading-relaxed text-zinc-300">
-                            Играта е на пауза и ще продължи автоматично в пейзажен режим.
-                        </p>
-                        <button
-                            type="button"
-                            class="mt-5 min-h-11 rounded-xl border border-zinc-600 px-5 py-2.5 text-sm font-bold text-zinc-200"
-                            @click="quit"
-                        >
-                            Назад към пистите
-                        </button>
-                    </div>
-                </div>
-
                 <!-- ── Преди старта: избор на трансмисия + управление ────── -->
                 <Teleport to="body">
                     <!-- Без leave transition: състезанието тръгва в същия кадър
@@ -3417,6 +3400,7 @@ const recenterTilt = () => {
                     <template v-if="preStart">
                         <div
                             class="game-dialog-layer fixed inset-0 z-[100] flex items-center justify-center overflow-hidden bg-black/65 p-2 backdrop-blur-sm sm:p-4"
+                            :class="{ 'forced-landscape': forcedLandscape }"
                         >
                             <div
                                 ref="preStartDialog"
@@ -3701,7 +3685,7 @@ const recenterTilt = () => {
                     <div
                         v-if="replaying"
                         class="absolute inset-x-0 bottom-0 z-30 flex justify-center px-4 pb-6"
-                        style="padding-bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px))"
+                        style="padding-bottom: calc(1.5rem + var(--safe-bottom, env(safe-area-inset-bottom, 0px)))"
                     >
                         <div class="w-full max-w-xl rounded-xl border border-zinc-700/70 bg-black/65 p-3 backdrop-blur-sm" role="group" aria-label="Повторение">
                             <!-- Скръбър със секторни тикове (само ако Game умее seek) -->
@@ -3802,6 +3786,7 @@ const recenterTilt = () => {
                         <div
                             v-if="raceResult && !replaying"
                             class="game-dialog-layer fixed inset-0 z-[100] flex items-center justify-center overflow-hidden bg-black/75 p-2 backdrop-blur-sm sm:p-4"
+                            :class="{ 'forced-landscape': forcedLandscape }"
                         >
                             <div
                                 ref="podiumDialog"
@@ -3998,6 +3983,7 @@ const recenterTilt = () => {
                         <div
                             v-if="result && !replaying"
                             class="game-dialog-layer fixed inset-0 z-[100] flex items-center justify-center overflow-hidden bg-black/75 p-2 backdrop-blur-sm sm:p-4"
+                            :class="{ 'forced-landscape': forcedLandscape }"
                         >
                             <div
                                 ref="resultDialog"
@@ -4405,10 +4391,10 @@ const recenterTilt = () => {
 /* Teleport-натите диалози могат да inert-нат целия PublicLayout и спазват
    safe-area отстъпите на телефони с прорез/gesture bar. */
 .game-dialog-layer {
-    padding-top: max(0.5rem, env(safe-area-inset-top, 0px));
-    padding-right: max(0.5rem, env(safe-area-inset-right, 0px));
-    padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));
-    padding-left: max(0.5rem, env(safe-area-inset-left, 0px));
+    padding-top: max(0.5rem, var(--safe-top, env(safe-area-inset-top, 0px)));
+    padding-right: max(0.5rem, var(--safe-right, env(safe-area-inset-right, 0px)));
+    padding-bottom: max(0.5rem, var(--safe-bottom, env(safe-area-inset-bottom, 0px)));
+    padding-left: max(0.5rem, var(--safe-left, env(safe-area-inset-left, 0px)));
 }
 
 .game-dialog-panel {
@@ -4428,24 +4414,24 @@ const recenterTilt = () => {
 }
 
 .game-stage-mobile .game-toolbar {
-    top: max(0.75rem, env(safe-area-inset-top, 0px));
-    right: max(0.75rem, env(safe-area-inset-right, 0px));
+    top: max(0.75rem, var(--safe-top, env(safe-area-inset-top, 0px)));
+    right: max(0.75rem, var(--safe-right, env(safe-area-inset-right, 0px)));
 }
 
 .game-stage-mobile .hud-timing {
-    top: max(0.75rem, env(safe-area-inset-top, 0px)) !important;
-    left: max(0.75rem, env(safe-area-inset-left, 0px)) !important;
+    top: max(0.75rem, var(--safe-top, env(safe-area-inset-top, 0px))) !important;
+    left: max(0.75rem, var(--safe-left, env(safe-area-inset-left, 0px))) !important;
 }
 
 .game-stage-mobile .hud-speed {
-    right: max(0.75rem, env(safe-area-inset-right, 0px)) !important;
+    right: max(0.75rem, var(--safe-right, env(safe-area-inset-right, 0px))) !important;
 }
 
 @media (orientation: landscape) {
     .game-stage-mobile .hud-timing {
         /* Оставя 12 px пред центрираната миникарта (72 px), включително
            когато прорезът на телефона измества левия край на HUD-а. */
-        max-width: min(20rem, calc(50vw - 3rem - max(0.75rem, env(safe-area-inset-left, 0px))));
+        max-width: min(20rem, calc(50vw - 3rem - max(0.75rem, var(--safe-left, env(safe-area-inset-left, 0px)))));
     }
 
     .game-stage-mobile .timing-panel {
@@ -4455,9 +4441,9 @@ const recenterTilt = () => {
 
 .mobile-controls {
     padding-top: 0.75rem;
-    padding-right: max(1rem, env(safe-area-inset-right, 0px));
-    padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
-    padding-left: max(1rem, env(safe-area-inset-left, 0px));
+    padding-right: max(1rem, var(--safe-right, env(safe-area-inset-right, 0px)));
+    padding-bottom: max(0.75rem, var(--safe-bottom, env(safe-area-inset-bottom, 0px)));
+    padding-left: max(1rem, var(--safe-left, env(safe-area-inset-left, 0px)));
 }
 
 .mobile-control-button,
@@ -4480,7 +4466,7 @@ const recenterTilt = () => {
 @media (orientation: landscape) and (max-height: 360px) {
     .mobile-controls {
         padding-top: 0.5rem;
-        padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));
+        padding-bottom: max(0.5rem, var(--safe-bottom, env(safe-area-inset-bottom, 0px)));
     }
 
     .mobile-control-button,
@@ -4501,24 +4487,127 @@ const recenterTilt = () => {
     }
 }
 
+/* Портретната подредба е за сцената преди „Карай"; завъртяната сцена е
+   пейзажна по съдържание и ползва пейзажните правила по-долу. */
 @media (max-width: 640px) and (orientation: portrait) {
-    .game-stage-mobile .hud-timing {
+    .game-stage-mobile:not(.game-stage-forced) .hud-timing {
         max-width: calc(100vw - 12.5rem);
     }
 
-    .game-stage-mobile .hud-timing > div:first-child {
+    .game-stage-mobile:not(.game-stage-forced) .hud-timing > div:first-child {
         max-width: 100%;
     }
 
-    .game-stage-mobile .hud-minimap {
+    .game-stage-mobile:not(.game-stage-forced) .hud-minimap {
         top: 5rem !important;
-        right: max(0.75rem, env(safe-area-inset-right, 0px)) !important;
+        right: max(0.75rem, var(--safe-right, env(safe-area-inset-right, 0px))) !important;
         left: auto !important;
         transform: none !important;
     }
 
-    .game-stage-mobile .hud-speed {
+    .game-stage-mobile:not(.game-stage-forced) .hud-speed {
         top: 10.25rem !important;
+    }
+}
+
+/* ── Завъртяна сцена (портретен viewport по време на каране) ─────────────
+   Слоят е пейзажен правоъгълник (дългата страна = височината на viewport-а),
+   завъртян на 90° по часовника около горния си ляв ъгъл и изместен с цялата
+   ширина вдясно — изглежда изправен, когато горният край на телефона е вляво
+   (landscape-primary). Hit-testing-ът на докосванията следва transform-а, а
+   canvas-ът се мери по clientWidth/Height (размерите преди завъртането). */
+.forced-landscape {
+    position: fixed;
+    top: 0;
+    right: auto;
+    bottom: auto;
+    left: 100%;
+    width: 100vh;
+    width: 100dvh;
+    height: 100vw;
+    height: 100dvw;
+    transform: rotate(90deg);
+    transform-origin: 0 0;
+}
+
+/* Страните на слоя не са страните на екрана: лявата е горната (прорезът),
+   горната е дясната и т.н. — отстъпите се преназначават. */
+.game-stage-mobile,
+.game-dialog-layer {
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
+}
+
+.game-stage-forced,
+.game-dialog-layer.forced-landscape {
+    --safe-top: env(safe-area-inset-right, 0px);
+    --safe-right: env(safe-area-inset-bottom, 0px);
+    --safe-bottom: env(safe-area-inset-left, 0px);
+    --safe-left: env(safe-area-inset-top, 0px);
+}
+
+/* vw/vh се отнасят до портретния viewport — в слоя ширината е vh, а
+   височината е vw. Същите мерки като в истинския пейзаж. */
+.game-stage-forced .hud-timing {
+    max-width: min(20rem, calc(50vh - 3rem - max(0.75rem, var(--safe-left))));
+    max-width: min(20rem, calc(50dvh - 3rem - max(0.75rem, var(--safe-left))));
+}
+
+.game-stage-forced .timing-panel {
+    overflow-wrap: anywhere;
+}
+
+.game-stage-forced .mobile-control-button,
+.game-stage-forced .mobile-pedal-button {
+    height: clamp(3.75rem, 20vw, 5rem);
+    height: clamp(3.75rem, 20dvw, 5rem);
+}
+
+.game-stage-forced .mobile-control-button {
+    width: clamp(4rem, 12vh, 6rem);
+    width: clamp(4rem, 12dvh, 6rem);
+}
+
+.game-stage-forced .mobile-pedal-button {
+    width: clamp(4.75rem, 14vh, 6.75rem);
+    width: clamp(4.75rem, 14dvh, 6.75rem);
+}
+
+.game-stage-forced .mobile-recenter {
+    min-height: clamp(3.75rem, 20vw, 5rem);
+    min-height: clamp(3.75rem, 20dvw, 5rem);
+}
+
+.game-dialog-layer.forced-landscape .game-dialog-panel {
+    max-height: calc(100vw - 1rem);
+    max-height: calc(100dvw - 1rem);
+}
+
+/* Пейзажният (max-height: 360px) и (max-height: 620px) по „височината" на
+   слоя — тя е ширината на viewport-а. */
+@media (max-width: 360px) {
+    .game-stage-forced .mobile-controls {
+        padding-top: 0.5rem;
+        padding-bottom: max(0.5rem, var(--safe-bottom));
+    }
+
+    .game-stage-forced .mobile-control-button,
+    .game-stage-forced .mobile-pedal-button,
+    .game-stage-forced .mobile-recenter {
+        height: 3.5rem;
+        min-height: 3.5rem;
+    }
+}
+
+@media (max-width: 620px) {
+    .game-stage-forced .game-hud .hud-secondary {
+        display: none;
+    }
+
+    .game-dialog-layer.forced-landscape .game-dialog-panel {
+        border-radius: 0.75rem;
     }
 }
 
