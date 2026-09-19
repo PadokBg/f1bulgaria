@@ -18,7 +18,7 @@
 import * as THREE from 'three';
 import { applyPatch } from './materialPatch.js';
 import { getNoiseTexture } from './noiseTex.js';
-import { REDLINE } from './drivetrain.js';
+import { SHIFT_RPM } from './drivetrain.js';
 
 /**
  * Нагряване по ос: heat += brake·|v|·dt·k. Плановете дават 0.09/0.05 — с тях
@@ -225,7 +225,7 @@ export function createCarEffects(rig, options = {}) {
         // Ауспух: събитията идват от трансмисията (визуален слой).
         if (drivetrain) {
             const gear = drivetrain.gear;
-            const rpmRatio = drivetrain.rpm / REDLINE;
+            const rpmRatio = drivetrain.rpm / SHIFT_RPM;
             if (prevGear !== null && gear !== prevGear && speed > 2 && !replay) {
                 if (
                     gear < prevGear &&
@@ -294,7 +294,7 @@ export function createCarEffects(rig, options = {}) {
                 hazeView.copy(hazeWorld).project(camera);
                 const dist = camera.position.distanceTo(hazeWorld);
                 const onScreen = hazeView.z < 1 && Math.abs(hazeView.x) < 1.3 && Math.abs(hazeView.y) < 1.3;
-                const rpmRatio = drivetrain ? drivetrain.rpm / REDLINE : 0;
+                const rpmRatio = drivetrain ? drivetrain.rpm / SHIFT_RPM : 0;
                 const amp = onScreen && speed > 8
                     ? clamp(throttle * 0.6 + rpmRatio * 0.4, 0, 1) * 0.18
                     : 0;

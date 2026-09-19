@@ -1549,12 +1549,15 @@ const liveAnnouncement = computed(() => {
 });
 
 // ── Оборотомер + предавка ──────────────────────────────────────────────────
-// Дублира drivetrain.js REDLINE нарочно: статичен import на модул, който и
-// lazy Game chunk-ът ползва, сгъва страницата в споделен _Index чънк и тя
-// изпада от Vite manifest-а (500 от @vite; виж manualChunks за device.js във
+// Скалата на бара е работният връх на двигателя от 2026 г. (drivetrain.js
+// SHIFT_RPM = 12 200) с малко въздух — лампите за смяна светват при
+// реалната смяна (~11 900), не при регламентния таван от 15 000. Числото е
+// дублирано нарочно: статичен import на модул, който и lazy Game chunk-ът
+// ползва, сгъва страницата в споделен _Index чънк и тя изпада от Vite
+// manifest-а (500 от @vite; виж manualChunks за device.js във
 // vite.config.js). Ако някога drivetrain.js получи свой чънк — импортирай.
-const REDLINE = 15000;
-const revFraction = computed(() => Math.min(1, (telemetry.value.rpm ?? 0) / REDLINE));
+const REV_SCALE = 12500;
+const revFraction = computed(() => Math.min(1, (telemetry.value.rpm ?? 0) / REV_SCALE));
 const atRedline = computed(() => revFraction.value > 0.94);
 const gearLabel = computed(() => (telemetry.value.gear === 0 ? 'R' : String(telemetry.value.gear ?? 1)));
 

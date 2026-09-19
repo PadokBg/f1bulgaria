@@ -71,7 +71,7 @@ import { shouldCaptureGameKey } from './keyboard.js';
 import { advanceQualityGovernor, createCadenceState, GOVERNOR, resetCadenceForRun, restartCadenceWindow } from './qualityGovernor.js';
 import { createLightweightAa } from './lightweightAa.js';
 import { prepareTrack, projectOnTrack } from './track.js';
-import { createDrivetrain, shiftDown, shiftUp, updateDrivetrain } from './drivetrain.js';
+import { SHIFT_RPM, createDrivetrain, shiftDown, shiftUp, updateDrivetrain } from './drivetrain.js';
 import { createTvDirector, recordClip as captureReplayClip } from './tvDirector.js';
 
 /** localStorage ключ на духа (най-бързата ТИ обиколка на това устройство). */
@@ -2922,9 +2922,9 @@ export class Game {
         if (
             this.prevThrottleForOverrun > 0.8 &&
             pedalThrottle < 0.1 &&
-            this.drivetrain.visualRpm > 11250
+            this.drivetrain.visualRpm > SHIFT_RPM * 0.77
         ) {
-            this.carEffects?.pops(this.sound.overrun(this.drivetrain.visualRpm / 15000));
+            this.carEffects?.pops(this.sound.overrun(this.drivetrain.visualRpm / SHIFT_RPM));
         }
         this.prevThrottleForOverrun = pedalThrottle;
 

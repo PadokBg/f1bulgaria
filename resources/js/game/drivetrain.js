@@ -3,9 +3,12 @@
  * звука. НЕ пипа физиката (там тягата е константна, виж physics.js): това е
  * визуално-звуков слой върху скоростта.
  *
- * По регламент на ФИА: 8 предавки напред + 1 задна, лимит на оборотите
- * 15 000 об/мин. Сменя автоматично нагоре при червената зона и надолу при
- * падане на оборотите (с хистерезис, за да не „лови" на границата).
+ * По регламента от 2026 г.: 8 предавки напред + 1 задна, таван на оборотите
+ * 15 000 об/мин. Таванът не е работният диапазон: над 10 500 об/мин
+ * енергията на горивото е ограничена, затова болидите сменят около
+ * 11 500–12 000 — стрелката и звукът следват реалния диапазон (SHIFT_RPM).
+ * Сменя автоматично нагоре в края на предавката и надолу при падане на
+ * оборотите (с хистерезис, за да не „лови" на границата).
  *
  * Два вида обороти живеят в обекта:
  * - `rpm` — геометричните (скорост ÷ предавка). Те решават смените и са
@@ -16,18 +19,29 @@
  *   HUD-ът четат него.
  */
 
-/** Лимит на оборотите (регламент на ФИА за турбо-хибридите). */
+/** Таванът на оборотите по регламента от 2026 г. — само лимитерът на ръчната го опира. */
 export const REDLINE = 15000;
+
+/**
+ * Оборотите в края на всяка предавка (при GEAR_TOP). Работният връх на
+ * двигателите от 2026 г.; оборотомерът и звукът са в този мащаб.
+ */
+export const SHIFT_RPM = 12200;
 
 /** Обороти на празен ход (F1 върти високо). */
 const IDLE = 4000;
 
-/** Прагове за автоматична смяна (хистерезис между тях спира трептенето). */
-const UPSHIFT = 14600;
-const DOWNSHIFT = 8500;
+/**
+ * Прагове за автоматична смяна (хистерезис между тях спира трептенето).
+ * Спрямо [IDLE, SHIFT_RPM] са на същите дялове като старите 14 600/8 500
+ * спрямо [IDLE, 15 000] — смените стават при същите скорости, сменя се
+ * само мащабът на оборотите.
+ */
+const UPSHIFT = 11900;
+const DOWNSHIFT = 7350;
 
 /**
- * Скорост (m/s), при която всяка предавка достига червената зона. 8-ма опира
+ * Скорост (m/s), при която всяка предавка стига SHIFT_RPM. 8-ма опира
  * максималната скорост на болида (~92 m/s ≈ 331 km/h). Прогресията е плавна.
  */
 const GEAR_TOP = [15, 23, 32, 42, 53, 65, 78, 95];
@@ -35,17 +49,17 @@ const GEAR_TOP = [15, 23, 32, 42, 53, 65, 78, 95];
 /**
  * Козметика на visualRpm. Качване: ignition cut държи оборотите 50 ms и
  * после ги пуска за 80 ms (безшевната кутия сменя без пауза, но оборотите не
- * падат мигновено). Сваляне: авто-blip +1200 об/мин за 100 ms. Потегляне:
+ * падат мигновено). Сваляне: авто-blip +900 об/мин за 100 ms. Потегляне:
  * под 8 m/s съединителят буксува и двигателят следва газта, не колелата.
- * Лимитер (ръчна): стрелката подскача ~12 Hz в 350 об/мин под червеното.
+ * Лимитер (ръчна): стрелката подскача ~12 Hz в 260 об/мин под тавана.
  */
 const UPSHIFT_HOLD = 0.05;
 const UPSHIFT_EASE = 0.08;
-const DOWNSHIFT_BLIP = 1200;
+const DOWNSHIFT_BLIP = 900;
 const DOWNSHIFT_BLIP_TIME = 0.1;
 const CLUTCH_SPEED = 8;
 const CLUTCH_THROTTLE_SHARE = 0.55;
-const LIMITER_BOUNCE = 350;
+const LIMITER_BOUNCE = 260;
 const LIMITER_BOUNCE_RATE = 75;
 const VISUAL_TAU = 0.03;
 
@@ -125,7 +139,7 @@ export function shiftDown(train) {
 function rpmFor(speed, gear) {
     const top = GEAR_TOP[gear - 1] ?? GEAR_TOP[GEAR_TOP.length - 1];
 
-    return IDLE + (speed / top) * (REDLINE - IDLE);
+    return IDLE + (speed / top) * (SHIFT_RPM - IDLE);
 }
 
 /**
@@ -183,7 +197,7 @@ function updateGeometric(train, vForward, throttle) {
         train.reverse = true;
         train.gear = 0;
         const frac = Math.min(1, Math.abs(vForward) / 12);
-        train.rpm = IDLE + frac * (REDLINE - IDLE) * 0.6;
+        train.rpm = IDLE + frac * (SHIFT_RPM - IDLE) * 0.6;
 
         return;
     }
@@ -199,7 +213,7 @@ function updateGeometric(train, vForward, throttle) {
         let rpm = rpmFor(speed, train.gear);
         if (speed < 2) {
             // Почти в покой оборотите следват газта (двигателят се върти).
-            rpm = Math.max(rpm, IDLE + throttle * (REDLINE - IDLE) * 0.45);
+            rpm = Math.max(rpm, IDLE + throttle * (SHIFT_RPM - IDLE) * 0.45);
         }
         train.rpm = clamp(rpm, IDLE, REDLINE);
 
@@ -210,7 +224,7 @@ function updateGeometric(train, vForward, throttle) {
     if (speed < 2) {
         // Почти в покой: оборотите следват газта (двигателят се върти без движение).
         train.gear = 1;
-        train.rpm = clamp(IDLE + throttle * (REDLINE - IDLE) * 0.45, IDLE, REDLINE);
+        train.rpm = clamp(IDLE + throttle * (SHIFT_RPM - IDLE) * 0.45, IDLE, REDLINE);
 
         return;
     }
@@ -250,7 +264,7 @@ function updateVisual(train, vForward, throttle, elapsed) {
         // колелата още не са го „хванали". Тежестта гасне линейно до 8 m/s.
         const speed = vForward > 0 ? vForward : 0;
         if (speed < CLUTCH_SPEED) {
-            const clutch = IDLE + throttle * (REDLINE - IDLE) * CLUTCH_THROTTLE_SHARE;
+            const clutch = IDLE + throttle * (SHIFT_RPM - IDLE) * CLUTCH_THROTTLE_SHARE;
             const weight = 1 - speed / CLUTCH_SPEED;
             target = Math.max(target, target * (1 - weight) + clutch * weight);
         }
