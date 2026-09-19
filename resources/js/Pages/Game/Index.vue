@@ -530,7 +530,7 @@ const emptyTelemetry = () => ({
     raceTotalLaps: 0,
     racePenalties: 0,
     draft: 0,
-    drs: null,
+    overtake: null,
     radar: null,
     tower: null,
     ghostDelta: null,
@@ -2993,14 +2993,20 @@ const recenterTilt = () => {
                                 >
                                     Слипстрийм
                                 </div>
-                                <!-- DRS: рамка = наличен след точката за засичане, плътно = отворен -->
+                                <!-- Режим за изпреварване (2026): рамка = енергията е налична,
+                                     плътно = пуска се сега; лентата е остатъкът от 0.5 MJ. -->
                                 <div
-                                    v-if="telemetry.drs"
-                                    class="flex items-center rounded-lg px-2.5 font-display text-[11px] font-black uppercase tracking-wider backdrop-blur-sm"
-                                    :class="telemetry.drs === 'open' ? 'bg-emerald-500 text-zinc-950' : 'border border-emerald-400/70 text-emerald-300'"
+                                    v-if="telemetry.overtake"
+                                    class="relative flex items-center overflow-hidden rounded-lg px-2.5 font-display text-[11px] font-black uppercase tracking-wider backdrop-blur-sm"
+                                    :class="telemetry.overtake.active ? 'bg-emerald-500 text-zinc-950' : 'border border-emerald-400/70 text-emerald-300'"
                                     role="status"
                                 >
-                                    DRS
+                                    <span class="relative">⚡ Изпреварване</span>
+                                    <span
+                                        class="absolute inset-x-0 bottom-0 h-0.5 origin-left bg-emerald-300"
+                                        :style="{ transform: `scaleX(${telemetry.overtake.charge})` }"
+                                        aria-hidden="true"
+                                    ></span>
                                 </div>
                             </div>
                             <div class="instrument-panel race-tower hud-secondary mt-1.5 rounded-lg px-3 py-2 text-[11px] tabular-nums">
@@ -3024,7 +3030,7 @@ const recenterTilt = () => {
                         </div>
                     </div>
 
-                    <!-- Радио от състезанието: наказания, атаки, DRS, смени на позиция -->
+                    <!-- Радио от състезанието: наказания, атаки, режим за изпреварване, смени на позиция -->
                     <div
                         v-if="raceMessages.length"
                         class="pointer-events-none absolute inset-x-0 top-16 z-20 flex flex-col items-center gap-1.5 px-4"

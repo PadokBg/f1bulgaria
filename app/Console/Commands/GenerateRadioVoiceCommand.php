@@ -56,7 +56,7 @@ class GenerateRadioVoiceCommand extends Command
     ];
 
     /** Фразите за --sample: по една от всеки тип съобщение. */
-    private const SAMPLE_CLIPS = ['last-lap', 'drs', 'bot-0-passed', 'penalty-contact', 'gained-p4'];
+    private const SAMPLE_CLIPS = ['last-lap', 'overtake', 'bot-0-passed', 'penalty-contact', 'gained-p4'];
 
     public function handle(): int
     {

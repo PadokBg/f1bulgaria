@@ -1,6 +1,7 @@
 /**
  * Чистата симулация на СЪСТЕЗАНИЕТО: играч + AI съперници + контакти между
- * колите + обиколки, наказания, DRS, грешки на ботовете и класиране. Без
+ * колите + обиколки, наказания, режим за изпреварване, грешки на ботовете
+ * и класиране. Без
  * three.js/DOM — същият код тича в браузъра (Game.js) и в Node
  * (scripts/game/validate-race.mjs).
  *
@@ -31,10 +32,11 @@ import {
     readTraceInput,
 } from './sim.js';
 
-/** Версия на правилата (решетка, ботове, контакти, наказания, DRS, финал).
- *  Вдига се при всяка промяна, с която същият вход дава друг резултат —
- *  сървърът отхвърля трейсове със стара версия, вместо да ги преиграе грешно. */
-export const RACE_VERSION = 1;
+/** Версия на правилата (решетка, ботове, контакти, наказания, режим за
+ *  изпреварване, финал). Вдига се при всяка промяна, с която същият вход дава
+ *  друг резултат — сървърът отхвърля трейсове със стара версия, вместо да ги
+ *  преиграе грешно. v2: DRS е заменен с режима за изпреварване от 2026 г. */
+export const RACE_VERSION = 2;
 
 /** Съперници на решетката. Влиза в трейса; сървърът приема само този брой. */
 export const RACE_OPPONENTS = 5;
@@ -66,18 +68,23 @@ const DRAFT_RANGE = 45; // m зад колата отпред, линейно о
 const DRAFT_WIDTH = 2.2; // m странично разминаване, отвъд — чист въздух
 const DRAFT_MIN_SPEED = 25; // m/s — под това аеродинамиката не се усеща
 
-/** DRS: на най-дългите прави, ако в точката за засичане си до 1 s зад кола. */
-const DRS_REDUCTION = 0.25; // дял от съпротивлението, който отвореното крило маха
-const DRS_WINDOW_TICKS = Math.round(1 / FIXED_DT);
-const DRS_FROM_LAP = 2; // обиколка 1 е бойна от решетката
-const DRS_STRAIGHT_CURVATURE = 0.0025; // 1/m — радиус над 400 m е права
-const DRS_MIN_STRAIGHT = 350; // m
-const DRS_MAX_ZONES = 2;
-const DRS_OPEN_AFTER = 60; // m след началото на правата
-const DRS_CLOSE_BEFORE = 60; // m преди края ѝ (спирачната зона)
-const DRS_DETECTION_BEFORE = 90; // m преди отварянето
+/**
+ * Режим за изпреварване — правилата от 2026 г. вместо DRS. Засичането е на
+ * линията (след финалния завой): до 1 s зад кола → още 0.5 MJ електрическа
+ * енергия за започващата обиколка; неизползваното изгаря на следващата
+ * линия. Колата я пуска сама на пълна газ в горната част на правите — там
+ * MGU-K иначе намалява мощността. Автоматично, защото бутон би сменил
+ * формата на записа за сървъра. Активната аеродинамика (отворени крила на
+ * правите) е за всички и не дава относително предимство — не е механизъм.
+ */
+const OVERTAKE_ENERGY = 0.5e6 / 800; // J/kg: 0.5 MJ върху ~800 kg кола с пилот
+const OVERTAKE_POWER = 350e3 / 800; // W/kg: пълната мощност на MGU-K
+const OVERTAKE_MIN_SPEED = 55; // m/s (~200 km/h) — горната част на правата
+const OVERTAKE_THROTTLE = 0.95;
+const OVERTAKE_WINDOW_TICKS = Math.round(1 / FIXED_DT);
+const OVERTAKE_FROM_LAP = 2; // обиколка 1 е бойна от решетката
 
-/** Точки за хронометраж по обиколката — интервали в секунди и DRS. */
+/** Точки за хронометраж по обиколката — интервали в секунди. */
 const TIMING_SPACING = 20; // m
 
 /** Вина за удар: нос в задница със сближаване над ~17 km/h. */
@@ -178,7 +185,6 @@ export function createRace(player, count = RACE_OPPONENTS) {
         entries,
         entryByState: new Map(entries.map((entry) => [entry.sim.state, entry])),
         timingPoints,
-        drsZones: findDrsZones(track),
         seed: hashString(`${track.slug}:mistakes`),
         mistakeRand: null,
         /** Стъпки от гасенето; спира при флага на играча (времето му). */
@@ -194,7 +200,7 @@ export function createRace(player, count = RACE_OPPONENTS) {
         frames: [],
         // Колко слипстрийм има играчът в последния тик, 0..1 (за HUD-а).
         playerDraft: 0,
-        // Събитията от последния тик (наказания, грешки, DRS, финали).
+        // Събитията от последния тик (наказания, грешки, режим за изпреварване, финали).
         events: [],
         // Преизползвани обекти — нула алокации на тик.
         contactCars: [],
@@ -214,7 +220,6 @@ function createEntry(sim, opponentIndex, timingPoints) {
         opponentIndex,
         laps: 0,
         lastProgress: 0,
-        lastIndex: 0,
         finishTick: null,
         contactPenalties: 0,
         lastExcursions: 0,
@@ -223,9 +228,11 @@ function createEntry(sim, opponentIndex, timingPoints) {
         faultCooldown: 0,
         timingPoint: -1,
         passTicks: new Float64Array(timingPoints),
-        drsPassTicks: new Float64Array(DRS_MAX_ZONES),
-        drsEligible: false,
-        drsOpen: false,
+        linePassTick: -1,
+        overtakeLap: 0,
+        overtakeEnergy: 0,
+        overtakeActive: false,
+        crossedLine: false,
         brakingZone: false,
         mistakeTicks: 0,
     };
@@ -261,7 +268,6 @@ export function gridRace(race) {
     for (const entry of race.entries) {
         entry.laps = 0;
         entry.lastProgress = entry.sim.lastProgress;
-        entry.lastIndex = entry.sim.trackIndexHint;
         entry.finishTick = null;
         entry.contactPenalties = 0;
         entry.lastExcursions = 0;
@@ -270,9 +276,10 @@ export function gridRace(race) {
         entry.faultCooldown = 0;
         entry.timingPoint = -1;
         entry.passTicks.fill(-1);
-        entry.drsPassTicks.fill(-1);
-        entry.drsEligible = false;
-        entry.drsOpen = false;
+        entry.linePassTick = -1;
+        entry.overtakeLap = entry.laps;
+        entry.overtakeEnergy = 0;
+        entry.overtakeActive = false;
         entry.brakingZone = false;
         entry.mistakeTicks = 0;
     }
@@ -295,7 +302,7 @@ export function gridRace(race) {
  * playerEvent = завършена хронометрирана обиколка на играча, finished =
  * карираният флаг на играча падна В ТАЗИ стъпка, classified = полето
  * доизкара и окончателното класиране е готово. race.events носи наказанията,
- * грешките, DRS и финалите от стъпката.
+ * грешките, режима за изпреварване и финалите от стъпката.
  *
  * @param {ReturnType<typeof createRace>} race
  * @param {{steer: number, throttle: number, brake: number}} rawInput
@@ -368,7 +375,7 @@ export function stepRace(race, rawInput) {
         noteExcursions(race, entry);
     }
 
-    updateDrs(race);
+    updateOvertake(race);
     applyAero(race);
 
     if (race.recordFrames && playerRacing && race.clock % FRAME_EVERY === 0) {
@@ -601,59 +608,6 @@ export function gridSlot(track, i) {
     };
 }
 
-/**
- * DRS зоните на пистата: най-дългите прави (кривина под прага по цялата
- * дължина), с отваряне след изхода от завоя и затваряне преди спирането.
- *
- * @param {import('./track.js').Track} track
- * @returns {Array<{detection: number, open: number, close: number}>} индекси
- */
-export function findDrsZones(track) {
-    const count = track.count;
-    const straightAt = (i) => Math.abs(track.raceCurv[i]) < DRS_STRAIGHT_CURVATURE;
-
-    // Броенето тръгва от завой, за да не се разцепи права през края на масива.
-    let origin = 0;
-    while (origin < count && straightAt(origin)) {
-        origin++;
-    }
-    if (origin === count) {
-        return [];
-    }
-
-    const straights = [];
-    let runStart = null;
-    for (let k = 1; k <= count; k++) {
-        const straight = k < count && straightAt((origin + k) % count);
-        if (straight && runStart === null) {
-            runStart = k;
-        } else if (!straight && runStart !== null) {
-            const length = (k - runStart) * track.spacing;
-            if (length >= DRS_MIN_STRAIGHT) {
-                straights.push({ from: runStart, length });
-            }
-            runStart = null;
-        }
-    }
-
-    straights.sort((a, b) => b.length - a.length || a.from - b.from);
-
-    return straights
-        .slice(0, DRS_MAX_ZONES)
-        .map(({ from, length }) => {
-            const open = from + Math.round(DRS_OPEN_AFTER / track.spacing);
-            const close = from + Math.round((length - DRS_CLOSE_BEFORE) / track.spacing);
-            const detection = open - Math.round(DRS_DETECTION_BEFORE / track.spacing);
-
-            return {
-                detection: (origin + detection + count) % count,
-                open: (origin + open) % count,
-                close: (origin + close) % count,
-            };
-        })
-        .sort((a, b) => a.open - b.open);
-}
-
 // ── Вътрешни ─────────────────────────────────────────────────────────────
 
 function penaltiesOf(entry) {
@@ -669,8 +623,8 @@ function noteLap(entry, event) {
 function finishEntry(race, entry) {
     entry.finishTick = race.clock;
     entry.frozenPenalties = entry.sim.excursions + entry.contactPenalties;
-    entry.drsOpen = false;
-    entry.drsEligible = false;
+    entry.overtakeEnergy = 0;
+    entry.overtakeActive = false;
     race.events.push({ type: 'finish', entry });
 }
 
@@ -785,67 +739,45 @@ function underPressure(race, opp) {
     return false;
 }
 
-/** Минала ли е колата индекса `target` в тази стъпка (напред по трасето). */
-function crossed(previous, current, target, count) {
-    const moved = (current - previous + count) % count;
-    if (moved === 0 || moved > count / 2) {
-        return false;
+/**
+ * Засичането на линията: колите, които я минаха в тази стъпка, получават
+ * енергията за изпреварване, ако до 1 s преди тях я е минала кола отпред.
+ * Два прохода — кола отпред, минала линията в същата стъпка, иначе би
+ * зависела от реда в масива.
+ *
+ * @param {ReturnType<typeof createRace>} race
+ */
+function updateOvertake(race) {
+    for (const entry of race.entries) {
+        entry.crossedLine = false;
+        if (entry.laps > entry.overtakeLap) {
+            entry.overtakeLap = entry.laps;
+            entry.linePassTick = race.clock;
+            entry.crossedLine = true;
+            // Неизползваното от миналата обиколка изгаря на линията.
+            entry.overtakeEnergy = 0;
+        }
     }
-    const toTarget = (target - previous + count) % count;
-
-    return toTarget > 0 && toTarget <= moved;
-}
-
-function updateDrs(race) {
-    const zones = race.drsZones;
-    const count = race.player.track.count;
 
     for (const entry of race.entries) {
-        const index = entry.sim.trackIndexHint;
-        const previous = entry.lastIndex;
-        entry.lastIndex = index;
-
-        if (!isRacing(race, entry) || entry.sim.recovering || index === null || previous === null) {
-            if (entry.drsOpen || entry.drsEligible) {
-                entry.drsOpen = false;
-                entry.drsEligible = false;
-            }
+        if (!entry.crossedLine || !isRacing(race, entry) || entry.sim.recovering) {
             continue;
         }
-
-        for (let z = 0; z < zones.length; z++) {
-            const zone = zones[z];
-
-            if (crossed(previous, index, zone.detection, count)) {
-                entry.drsPassTicks[z] = race.clock;
-                entry.drsEligible = entry.laps >= DRS_FROM_LAP && carWithinDrsWindow(race, entry, z);
-                if (entry.drsEligible) {
-                    race.events.push({ type: 'drs', entry, state: 'available' });
-                }
-            }
-
-            if (crossed(previous, index, zone.open, count) && entry.drsEligible) {
-                entry.drsOpen = true;
-                race.events.push({ type: 'drs', entry, state: 'open' });
-            }
-
-            if (crossed(previous, index, zone.close, count)) {
-                entry.drsOpen = false;
-                entry.drsEligible = false;
-            }
+        if (entry.laps >= OVERTAKE_FROM_LAP && carAheadWithinSecond(race, entry)) {
+            entry.overtakeEnergy = OVERTAKE_ENERGY;
+            race.events.push({ type: 'overtake', entry, state: 'available' });
         }
     }
 }
 
-function carWithinDrsWindow(race, entry, zone) {
+function carAheadWithinSecond(race, entry) {
     const covered = entry.laps + entry.lastProgress;
     for (const other of race.entries) {
-        if (other === entry || !isRacing(race, other)) {
+        if (other === entry || !isRacing(race, other) || other.linePassTick < 0) {
             continue;
         }
-        const passed = other.drsPassTicks[zone];
         const ahead = other.laps + other.lastProgress > covered;
-        if (ahead && passed >= 0 && race.clock - passed <= DRS_WINDOW_TICKS) {
+        if (ahead && race.clock - other.linePassTick <= OVERTAKE_WINDOW_TICKS) {
             return true;
         }
     }
@@ -853,10 +785,22 @@ function carWithinDrsWindow(race, entry, zone) {
 }
 
 /**
- * Слипстрийм + DRS: колата губи част от съпротивлението — плътно зад кола в
- * същата лента (до нула на DRAFT_RANGE / DRAFT_WIDTH) и с отворено крило.
- * Прилага се след физиката на тика като допълнително ускорение, таванът е
- * максималната скорост на колата. Играчът след флага не участва.
+ * Колко от енергията за изпреварване остава на колата, 0..1 (за HUD-а).
+ *
+ * @param {RaceEntry} entry
+ * @returns {number}
+ */
+export function overtakeCharge(entry) {
+    return entry.overtakeEnergy / OVERTAKE_ENERGY;
+}
+
+/**
+ * Слипстрийм + режим за изпреварване. Слипстрийм: колата губи част от
+ * съпротивлението плътно зад кола в същата лента (до нула на DRAFT_RANGE /
+ * DRAFT_WIDTH). Режимът: допълнителна мощност P → ускорение P/v, докато
+ * стигне енергията. И двете се прилагат след физиката на тика като
+ * допълнително ускорение, таванът е максималната скорост на колата. Играчът
+ * след флага не участва.
  *
  * @param {ReturnType<typeof createRace>} race
  */
@@ -873,6 +817,7 @@ function applyAero(race) {
 
         const follower = followerEntry.sim;
         const speed = follower.state.vForward;
+        followerEntry.overtakeActive = false;
         if (follower.recovering || speed < DRAFT_MIN_SPEED || follower.trackIndexHint === null) {
             continue;
         }
@@ -908,9 +853,20 @@ function applyAero(race) {
             if (candidate > strength) strength = candidate;
         }
 
-        const reduction = DRAFT_MAX * strength + (followerEntry.drsOpen ? DRS_REDUCTION : 0);
-        if (reduction > 0) {
-            const boosted = speed + CAR.drag * speed * speed * reduction * FIXED_DT;
+        let boost = DRAFT_MAX * strength * CAR.drag * speed * speed * FIXED_DT;
+        if (
+            followerEntry.overtakeEnergy > 0 &&
+            speed >= OVERTAKE_MIN_SPEED &&
+            follower.state.throttlePedal >= OVERTAKE_THROTTLE
+        ) {
+            // Енергия на kg за тика: P·dt, а последната порция — колкото е останало.
+            const energy = Math.min(OVERTAKE_POWER * FIXED_DT, followerEntry.overtakeEnergy);
+            followerEntry.overtakeEnergy -= energy;
+            followerEntry.overtakeActive = true;
+            boost += energy / speed;
+        }
+        if (boost > 0) {
+            const boosted = speed + boost;
             follower.state.vForward = boosted < CAR.maxSpeed ? boosted : CAR.maxSpeed;
         }
         if (followerEntry === race.playerLaps) {

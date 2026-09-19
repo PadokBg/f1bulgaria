@@ -1,6 +1,6 @@
 /**
  * Селфтест на детерминизма на СЪСТЕЗАНИЕТО: автопилот кара вместо играча
- * срещу пълната решетка (контакти, наказания, DRS, грешки на ботовете),
+ * срещу пълната решетка (контакти, наказания, режим за изпреварване, грешки на ботовете),
  * записът се преиграва през сериализацията (пътят на сървъра) и резултатът,
  * окончателното класиране и кадрите на духа трябва да съвпаднат ТОЧНО.
  *
@@ -51,7 +51,7 @@ function driveRace(race, scenario) {
     const options = { pace: scenario.pace, others: scenario.blind ? [] : race.opponents.map((opp) => opp.sim) };
     const input = { steer: 0, throttle: 0, brake: 0 };
     const maxTicks = 25 * 60 * 120;
-    const counts = { mistakes: 0, contactPenalties: 0, drsOpen: 0 };
+    const counts = { mistakes: 0, contactPenalties: 0, overtakeGrants: 0 };
 
     resetAutopilotDriver(race.player);
     for (let tick = 0; tick < maxTicks && race.classification === null; tick++) {
@@ -63,7 +63,7 @@ function driveRace(race, scenario) {
         for (const event of race.events) {
             if (event.type === 'mistake') counts.mistakes++;
             if (event.type === 'penalty' && event.reason === 'contact') counts.contactPenalties++;
-            if (event.type === 'drs' && event.state === 'open') counts.drsOpen++;
+            if (event.type === 'overtake') counts.overtakeGrants++;
         }
     }
 
@@ -96,7 +96,7 @@ for (const scenario of SCENARIOS) {
     console.log(
         `[${scenario.name}] ${live.raceMs} ms + ${live.penalties} наказания (${live.trackLimits} излизания, ` +
         `${live.contactFaults} удара) = ${live.totalMs} ms, П${live.position}→П${live.finalPosition}/${RACE_OPPONENTS + 1}, ` +
-        `грешки на ботове ${counts.mistakes}, DRS ${counts.drsOpen}, трейс ${(encoded.length / 1024).toFixed(0)} KB`
+        `грешки на ботове ${counts.mistakes}, режим за изпреварване ×${counts.overtakeGrants}, трейс ${(encoded.length / 1024).toFixed(0)} KB`
     );
 
     if (scenario.expectContactFaults && live.contactFaults === 0) {

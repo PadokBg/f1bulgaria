@@ -26,9 +26,9 @@ function racePayload(array $overrides = []): array
         'race_ms' => 360000,
         'penalties' => 2,
         'position' => 3,
-        'trace' => '{"v":3,"rv":1,"opponents":5,"inputs":"AAAA"}',
+        'trace' => '{"v":3,"rv":2,"opponents":5,"inputs":"AAAA"}',
         'sim_version' => 3,
-        'race_version' => 1,
+        'race_version' => (int) config('game.race_version'),
     ], $overrides);
 }
 
@@ -81,7 +81,7 @@ it('записва състезанието като pending, смята нак�
 
     expect($record->verify_status)->toBe('pending')
         ->and($record->total_ms)->toBe(370000)
-        ->and($record->race_version)->toBe(1);
+        ->and($record->race_version)->toBe((int) config('game.race_version'));
 
     Queue::assertPushed(
         ValidateGameRaceJob::class,
@@ -193,7 +193,7 @@ it('сервира духа на най-доброто състезание с �
         ->assertOk()
         ->assertJson([
             'v' => 3,
-            'rv' => 1,
+            'rv' => (int) config('game.race_version'),
             'race_ms' => 355000,
             'penalties' => 1,
             'total_ms' => 360000,

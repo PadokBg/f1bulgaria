@@ -57,6 +57,7 @@ import {
     encodeRaceTrace,
     gridRace,
     gridSlot,
+    overtakeCharge,
     raceGap,
     racePenalties,
     recordTimingAt,
@@ -2505,7 +2506,7 @@ export class Game {
         this.#notify(this.onRaceMessage, { id: this.radio.sequence, text, tone });
     }
 
-    /** Събития от race.js (наказания, грешки, DRS) → радио. */
+    /** Събития от race.js (наказания, грешки, режим за изпреварване) → радио. */
     #radioEvent(event) {
         const race = this.race;
         const me = race.playerLaps;
@@ -2534,8 +2535,8 @@ export class Game {
                     [clip(event.entry, event.big ? 'off' : 'mistake')]
                 );
             }
-        } else if (event.type === 'drs' && event.entry === me && event.state === 'available') {
-            this.#say('DRS е наличен', 'good', false, ['drs']);
+        } else if (event.type === 'overtake' && event.entry === me) {
+            this.#say('Режим за изпреварване: +0.5 MJ', 'good', false, ['overtake']);
         }
     }
 
@@ -2989,7 +2990,7 @@ export class Game {
         let position = 1;
         let tower = null;
         let radar = null;
-        let drs = null;
+        let overtake = null;
         if (this.race) {
             const race = this.race;
             const rows = race.entries.map((entry) => ({
@@ -3028,7 +3029,8 @@ export class Game {
             });
 
             radar = this.#radar();
-            drs = race.playerLaps.drsOpen ? 'open' : race.playerLaps.drsEligible ? 'available' : null;
+            const charge = overtakeCharge(race.playerLaps);
+            overtake = charge > 0 || race.playerLaps.overtakeActive ? { charge, active: race.playerLaps.overtakeActive } : null;
             this.#radioTelemetry(rows, position);
         }
 
@@ -3076,8 +3078,8 @@ export class Game {
             racePenalties: this.race ? racePenalties(this.race) : 0,
             // Слипстрийм зад кола отпред, 0..1 (race.js).
             draft: this.race ? this.race.playerDraft : 0,
-            // DRS на играча: 'available' след точката за засичане, 'open' в зоната.
-            drs,
+            // Режим за изпреварване на играча: остатък 0..1 и пуска ли се сега.
+            overtake,
             // Кола отстрани: 0..1 отляво/отдясно на екрана.
             radar,
             tower,

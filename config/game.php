@@ -27,8 +27,9 @@ return [
     'sim_version' => 3,
 
     // Mirrors RACE_VERSION in resources/js/game/race.js (grid, bots, contacts,
-    // penalties, finish). Bumping it starts a fresh race leaderboard.
-    'race_version' => 1,
+    // penalties, overtake mode, finish). Bumping it starts a fresh race
+    // leaderboard. v2: DRS replaced by the 2026 overtake mode.
+    'race_version' => 2,
 
     // Mirrors RACE_OPPONENTS / RACE_PENALTY_MS in race.js.
     'race' => [

@@ -157,7 +157,7 @@ it('пробите не пипат клиповете на играта и пр�
 
     Http::assertSentCount(5);
     expect(File::exists($this->outputDir.'/manifest.json'))->toBeFalse()
-        ->and(File::exists($this->outputDir.'/samples/raw-voice-id/drs.mp3'))->toBeTrue();
+        ->and(File::exists($this->outputDir.'/samples/raw-voice-id/overtake.mp3'))->toBeTrue();
 });
 
 it('показва гласовете в акаунта', function () {

@@ -7,7 +7,8 @@
  *
  * Колони: финална позиция и общо време на играча, изпреварвания в полето
  * (смени в подредбата), % от времето с кола на ≤ 30 m от играча, контакти
- * (нови удари с импулс > 1.5), излизания на ботовете.
+ * (нови удари с импулс > 1.5), излизания на ботовете, режим за изпреварване
+ * (колко пъти е даден и колко секунди общо е пускан от всички коли).
  */
 
 import { readFileSync } from 'node:fs';
@@ -38,7 +39,8 @@ for (const slug of slugs) {
     let contactCooldown = 0;
     let ticks = 0;
     let mistakes = 0;
-    let drsOpened = 0;
+    let overtakeGrants = 0;
+    let overtakeTicks = 0;
     let faults = 0;
 
     for (; ticks < 25 * 60 * 120 && race.classification === null; ticks++) {
@@ -46,8 +48,11 @@ for (const slug of slugs) {
         stepRace(race, input);
         for (const event of race.events) {
             if (event.type === 'mistake') mistakes++;
-            if (event.type === 'drs' && event.state === 'open') drsOpened++;
+            if (event.type === 'overtake') overtakeGrants++;
             if (event.type === 'penalty' && event.reason === 'contact') faults++;
+        }
+        for (const entry of race.entries) {
+            if (entry.overtakeActive) overtakeTicks++;
         }
         if (race.result !== null) {
             continue;
@@ -90,7 +95,8 @@ for (const slug of slugs) {
         contacts,
         botExc: race.opponents.reduce((sum, opp) => sum + opp.sim.excursions, 0),
         mistakes,
-        drs: drsOpened,
+        ot: overtakeGrants,
+        otSec: (overtakeTicks * FIXED_DT).toFixed(1),
         faults,
         minutes: (ticks * FIXED_DT / 60).toFixed(1),
     });
