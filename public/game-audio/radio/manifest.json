@@ -185,11 +185,6 @@
                     "hash": "df99780deabdf594488d508c73b30468bc0c81d5",
                     "text": "Марков получи наказание за удара в теб."
                 },
-                "drs": {
-                    "file": "adam/drs.mp3",
-                    "hash": "2d19e8860fce01cd1bc18e3aa04cd6aeef744efd",
-                    "text": "Ди Ар Ес е наличен. Атакувай!"
-                },
                 "gained-p1": {
                     "file": "adam/gained-p1.mp3",
                     "hash": "178f7a2192f12c53671875baab4653994e3a4028",
@@ -244,6 +239,11 @@
                     "file": "adam/lost-p6.mp3",
                     "hash": "ad1a4cd49f69ad6645fd28c3f2e6c8694ca473dd",
                     "text": "Падна на последното място."
+                },
+                "overtake": {
+                    "file": "adam/overtake.mp3",
+                    "hash": "e5b3a641304aa997ba4fd562d55c1765d1f9c716",
+                    "text": "Имаш режим за изпреварване. Атакувай!"
                 },
                 "penalty-contact": {
                     "file": "adam/penalty-contact.mp3",
@@ -450,11 +450,6 @@
                     "hash": "153d96a56b3fabc1664038f76694b66d20349604",
                     "text": "Марков получи наказание за удара в теб."
                 },
-                "drs": {
-                    "file": "charlie/drs.mp3",
-                    "hash": "856bd7c104059e07376cf080367463ccc9822c7a",
-                    "text": "Ди Ар Ес е наличен. Атакувай!"
-                },
                 "gained-p1": {
                     "file": "charlie/gained-p1.mp3",
                     "hash": "f9a55cc02acc34b96d5fe50a0eea26d947878d45",
@@ -509,6 +504,11 @@
                     "file": "charlie/lost-p6.mp3",
                     "hash": "00c6b10d42e1795d9ac088ee0824fc8d8e018b9d",
                     "text": "Падна на последното място."
+                },
+                "overtake": {
+                    "file": "charlie/overtake.mp3",
+                    "hash": "c14b7763356e201419bc7acb9c128e2da6199df0",
+                    "text": "Имаш режим за изпреварване. Атакувай!"
                 },
                 "penalty-contact": {
                     "file": "charlie/penalty-contact.mp3",
@@ -715,11 +715,6 @@
                     "hash": "1ca29f4ac8b9a36ebfd17f5e078bf4e6f8d2f4ab",
                     "text": "Марков получи наказание за удара в теб."
                 },
-                "drs": {
-                    "file": "daniel/drs.mp3",
-                    "hash": "cfb8d1c2dd772de17a9994d61b1872c64ae835c8",
-                    "text": "Ди Ар Ес е наличен. Атакувай!"
-                },
                 "gained-p1": {
                     "file": "daniel/gained-p1.mp3",
                     "hash": "12263f2835a6674ab9ddd2b6fb702d9873884a9b",
@@ -774,6 +769,11 @@
                     "file": "daniel/lost-p6.mp3",
                     "hash": "ee21860127d52a0908e3c64784eff75f18ba6b20",
                     "text": "Падна на последното място."
+                },
+                "overtake": {
+                    "file": "daniel/overtake.mp3",
+                    "hash": "e5af03ce447f0b163c9dc4ae2783ca80f47113e2",
+                    "text": "Имаш режим за изпреварване. Атакувай!"
                 },
                 "penalty-contact": {
                     "file": "daniel/penalty-contact.mp3",
