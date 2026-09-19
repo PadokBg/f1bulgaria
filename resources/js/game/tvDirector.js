@@ -245,6 +245,7 @@ export function createTvDirector(camera, track, circuit, options = {}) {
         driver.reset();
         ensurePosts();
         api.active = true;
+        chaseCamera?.setMode(mode === 'onboard' ? 'onboard' : 'chase');
         if (halo !== null) {
             halo.visible = mode === 'onboard';
         }
@@ -279,6 +280,7 @@ export function createTvDirector(camera, track, circuit, options = {}) {
             return;
         }
         mode = next;
+        chaseCamera?.setMode(mode === 'onboard' ? 'onboard' : 'chase');
         if (mode === 'tv') {
             currentPost = null;
             justCut = true;

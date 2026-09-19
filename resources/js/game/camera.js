@@ -31,8 +31,8 @@ const KERB_PERIOD = 0.9;
 /**
  * Настройки по подразбиране. Дистанция/височина са при покой; „s" е
  * smootherstep на скоростта (0..1). FOV стойностите са ХОРИЗОНТАЛНИ градуси.
- * Бордовата двойка (87→103) възпроизвежда 56°→70° вертикално на 16:9 —
- * числата от плана, само изразени по аспект-независимия начин.
+ * Кокпитът пази почти постоянен ъгъл: големият zoom при скорост мести
+ * волана и halo-то в кадъра и прави дистанциите трудни за преценка.
  */
 export const CHASE_TUNING = Object.freeze({
     distance: 8.8,
@@ -48,14 +48,14 @@ export const CHASE_TUNING = Object.freeze({
     fovHIdle: 88,
     fovHFast: 90,
     fovBrake: 0.5,
-    onboardHeight: 1.05,
-    onboardForward: 0.25,
+    onboardHeight: 0.62,
+    onboardForward: 0.10,
     onboardLookAhead: 55,
     onboardLookHeight: 1.0,
     onboardLookDamping: 14,
-    onboardFovHIdle: 87,
-    onboardFovHFast: 103,
-    onboardRigBlend: 0.25,
+    onboardFovHIdle: 96,
+    onboardFovHFast: 99,
+    onboardRigBlend: 0.18,
     corridorMargin: 5,
     corridorMarginStreet: 0.9,
     floorClearance: 1.4,
@@ -120,6 +120,9 @@ export function createChaseCamera(camera, track, options = {}) {
     const lowPower = options.lowPower === true;
     const onFovChange = typeof options.onFovChange === 'function' ? options.onFovChange : null;
     const T = { ...CHASE_TUNING, ...(options.tuning ?? {}) };
+    const externalNear = camera.near;
+    let hiddenHelmet = null;
+    let helmetWasVisible = true;
 
     const streetWalls = circuit?.streetWalls === true;
     const tunnel = circuit?.tunnel ?? null;
@@ -170,6 +173,7 @@ export function createChaseCamera(camera, track, options = {}) {
     const yawQuat = new THREE.Quaternion();
     const lookQuat = new THREE.Quaternion();
     const lookMatrix = new THREE.Matrix4();
+    const eyeLocal = new THREE.Vector3();
 
     const api = {
         mode: 'chase',
@@ -191,15 +195,50 @@ export function createChaseCamera(camera, track, options = {}) {
      * @param {'chase'|'onboard'} mode
      */
     function setMode(mode) {
-        if ((mode !== 'chase' && mode !== 'onboard') || mode === api.mode) {
+        if (mode !== 'chase' && mode !== 'onboard') {
             return;
         }
+        const changed = mode !== api.mode;
         api.mode = mode;
-        if (halo) {
-            halo.visible = mode === 'onboard';
-        }
+        syncCockpitVisibility();
+        if (!changed) return;
+        fovH = mode === 'onboard' ? T.onboardFovHIdle : T.fovHIdle;
+        applyFov();
         // Погледът да не замахне от старата точка.
         hasLook = false;
+    }
+
+    function syncCockpitVisibility() {
+        const onboard = api.mode === 'onboard';
+        const helmet = onboard ? rig?.helmet ?? null : null;
+        if (hiddenHelmet !== helmet) {
+            if (hiddenHelmet) hiddenHelmet.visible = helmetWasVisible;
+            hiddenHelmet = helmet;
+            if (helmet) helmetWasVisible = helmet.visible;
+        }
+        if (hiddenHelmet) hiddenHelmet.visible = false;
+        if (halo) {
+            halo.visible = onboard;
+        }
+        const near = onboard ? 0.045 : externalNear;
+        if (camera.near !== near) {
+            camera.near = near;
+            camera.updateProjectionMatrix();
+        }
+    }
+
+    function driverEye() {
+        // The shipped GLB head centre is (.0, .608, .069). The eye is
+        // slightly higher and forward, beneath its real integrated halo.
+        // Read the live helmet so an asynchronously attached model also works.
+        if (rig?.helmet) {
+            eyeLocal.copy(rig.helmet.position);
+            eyeLocal.y += 0.012;
+            eyeLocal.z += 0.031;
+        } else {
+            eyeLocal.set(0, T.onboardHeight, T.onboardForward);
+        }
+        return eyeLocal;
     }
 
     /**
@@ -232,6 +271,19 @@ export function createChaseCamera(camera, track, options = {}) {
         camera.position.copy(smoothPos);
         camera.up.copy(UP);
         camera.lookAt(state.x, surface.height + 0.6, state.z);
+        syncCockpitVisibility();
+        if (api.mode === 'onboard') {
+            if (rig) {
+                rig.body.updateWorldMatrix(true, false);
+                camera.position.copy(rig.body.localToWorld(driverEye()));
+                rig.body.getWorldQuaternion(camera.quaternion);
+            } else {
+                camera.position.set(state.x + forwardX * T.onboardForward,
+                    surface.height + T.onboardHeight, state.z + forwardZ * T.onboardForward);
+                camera.quaternion.setFromAxisAngle(UP, state.heading);
+            }
+            camera.rotateY(Math.PI);
+        }
     }
 
     /**
@@ -273,6 +325,7 @@ export function createChaseCamera(camera, track, options = {}) {
         if (mode !== undefined) {
             setMode(mode);
         }
+        syncCockpitVisibility();
 
         const surface = sim.surface;
         const heading = render.heading;
@@ -390,7 +443,7 @@ export function createChaseCamera(camera, track, options = {}) {
 
         // ── Шейк: върху презаписаната позиция, никога в изгладената ──────
         const t = effectTime;
-        const kickAmp = kick * (isOnboard ? 1.6 : 0.5);
+        const kickAmp = kick * (isOnboard ? 0.12 : 0.5);
         kick *= Math.exp(-9 * dt);
 
         // Микро-трептенето е почти незабележимо в chase. Силното движение на
@@ -438,8 +491,8 @@ export function createChaseCamera(camera, track, options = {}) {
         if (isOnboard) {
             // G-tilt върху ориентацията от рига: спирачката навежда носа,
             // завоят накланя главата (както досега), плюс шейк ролката.
-            camera.rotateX(gLong * 0.0012);
-            camera.rotateZ(-gLat * 0.0022 + roll);
+            camera.rotateX(clamp(gLong, -50, 50) * 0.0007);
+            camera.rotateZ(-clamp(gLat, -40, 40) * 0.0008 + roll);
         } else {
             camera.rotateZ(camRoll + roll);
         }
@@ -457,16 +510,16 @@ export function createChaseCamera(camera, track, options = {}) {
     }
 
     /**
-     * Бордова (halo) камера: болтната за роло-обръча — позицията и базовата
+     * Камера от очите на пилота — позицията и базовата
      * ориентация идват от рига (наклон по склона, крен по банкинга/завоя,
-     * пич при спиране), към които се смесва 25 % демпфиран поглед напред.
+     * пич при спиране), към които се смесва малко демпфиран поглед напред.
      */
     function updateOnboard(dt, render, sim, surface, lookYaw, slipAngle, forwardX, forwardZ) {
         if (rig !== null) {
             // updateCarRig е сложил root/body преди нас; световната матрица
             // обаче се смята чак при рендера — две матрици, евтино.
             rig.body.updateWorldMatrix(true, false);
-            scratch.set(0, T.onboardHeight, T.onboardForward);
+            scratch.copy(driverEye());
             rig.body.localToWorld(scratch);
             camera.position.copy(scratch);
             rig.body.getWorldQuaternion(rigQuat);
@@ -577,6 +630,8 @@ export function createChaseCamera(camera, track, options = {}) {
     }
 
     function dispose() {
+        api.mode = 'chase';
+        syncCockpitVisibility();
         hasLook = false;
         kick = 0;
     }

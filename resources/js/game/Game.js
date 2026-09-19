@@ -30,6 +30,7 @@ import { createChaseCamera } from './camera.js';
 import { createCarEffects } from './carEffects.js';
 import { circuitFor } from './circuits.js';
 import { createCascadedShadows } from './csm.js';
+import { createCockpit } from './cockpit.js';
 import { consumeShift, gamepadConnected, hapticPulse, readGamepad } from './gamepad.js';
 import { applyNightSheen, createNightLights } from './nightLights.js';
 import { ParticleEffects } from './particles.js';
@@ -533,12 +534,13 @@ export class Game {
         // дете на камерата — видим само в бордовия режим.
         this.cameraMode = 'chase';
         this.scene.add(this.camera);
-        this.halo = buildHaloOverlay();
+        this.cockpit = createCockpit({ lowPower: this.lowPower });
+        this.cockpitTelemetry = {};
+        this.halo = this.cockpit.group;
         this.halo.visible = false;
         this.camera.add(this.halo);
         // Воланът в бордовата камера — върти се със state.steer.
-        this.steeringWheel = buildSteeringWheel();
-        this.halo.add(this.steeringWheel);
+        this.steeringWheel = this.cockpit.steeringWheel;
         this.chaseCamera = createChaseCamera(this.camera, this.track, {
             circuit: this.circuit,
             rig: this.carRig,
@@ -1319,6 +1321,9 @@ export class Game {
         }
         this.cameraMode = mode;
         this.chaseCamera.setMode(mode);
+        // The start-light countdown renders a parked car without a camera
+        // update. Place the eye immediately when selecting the cockpit there.
+        this.chaseCamera.snap(this.sim.state, this.sim.surface);
         this.halo.visible = mode === 'onboard';
         this.lookTarget = this.chaseCamera.lookTarget;
     }
@@ -1342,6 +1347,7 @@ export class Game {
         this.stop();
         this.tvDirector?.dispose();
         this.chaseCamera?.dispose();
+        this.cockpit?.dispose();
         this.carEffects?.dispose();
         this.#clearOpponents();
         this.playerSkidWriter?.end();
@@ -2002,7 +2008,22 @@ export class Game {
     }
 
     /** Рендер през composer-а (десктоп) или директно (телефон). */
-    #render() {
+    #render(dt = 0) {
+        if (this.cockpit && this.halo.visible) {
+            const replay = this.replay && this.tvDirector?.active;
+            const state = replay ? this.tvDirector.car : this.sim.state;
+            const drivetrain = replay ? this.tvDirector.drivetrain : this.drivetrain;
+            const telemetry = this.cockpitTelemetry;
+            telemetry.speedKph = Math.abs(state.vForward) * 3.6;
+            telemetry.gear = drivetrain?.gear ?? 1;
+            telemetry.rpm = drivetrain?.visualRpm ?? 4000;
+            telemetry.aspect = this.camera.aspect;
+            telemetry.fov = this.camera.fov;
+            telemetry.hasModel = Boolean(this.carRig.model);
+            telemetry.gLong = this.chaseCamera.gLong;
+            telemetry.gLat = this.chaseCamera.gLat;
+            this.cockpit.update(telemetry, dt);
+        }
         // Звездите (нощ) висят на фиксиран радиус ОКОЛО камерата — така
         // никога не опират far плана, а без паралакс изглеждат безкрайно далеч.
         this.stars?.position.copy(this.camera.position);
@@ -2973,7 +2994,7 @@ export class Game {
             this.cameraMode === 'onboard' ? this.lookTarget : this.carRig.root.position
         );
 
-        this.#render();
+        this.#render(dt);
 
         // HUD телеметрия — не по-често от 30 Hz (виж TELEMETRY_INTERVAL): Vue
         // реактивността на всеки кадър е излишен diff/patch + GC натиск, а
@@ -3402,7 +3423,7 @@ export class Game {
 
         this.onLaunch(lit);
         this.#updatePostFx(dt, 0, null);
-        this.#render();
+        this.#render(dt);
     }
 
     /**
@@ -3642,7 +3663,7 @@ export class Game {
         this.#followSun(car.x, car.y, car.z);
         this.cascadedShadows?.update(this.carRig.root.position);
         this.#updatePostFx(dt, clamp01(Math.abs(car.vForward) / CAR.maxSpeed), this.carRig.root.position);
-        this.#render();
+        this.#render(dt);
 
         if (!this.replay?.attract) {
             this.telemetryAccum += dt;
@@ -3980,64 +4001,6 @@ function buildMinimap(track) {
     }
 
     return { path, project };
-}
-
-/**
- * Воланът за бордовата камера: обръч + спици + хъб, дете на halo групата.
- *
- * @returns {THREE.Group}
- */
-function buildSteeringWheel() {
-    const group = new THREE.Group();
-    const dark = new THREE.MeshBasicMaterial({ color: 0x14161a });
-    const accent = new THREE.MeshBasicMaterial({ color: 0x2c3038 });
-
-    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.02, 6, 20), dark);
-    group.add(rim);
-
-    for (const angle of [0, (2 * Math.PI) / 3, (4 * Math.PI) / 3]) {
-        const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.15, 0.015), accent);
-        spoke.position.set(Math.sin(angle) * 0.075, Math.cos(angle) * 0.075, 0);
-        spoke.rotation.z = -angle;
-        group.add(spoke);
-    }
-
-    const hub = new THREE.Mesh(new THREE.CircleGeometry(0.045, 10), accent);
-    hub.position.z = 0.008;
-    group.add(hub);
-
-    group.position.set(0, -0.32, -0.52);
-
-    return group;
-}
-
-/**
- * Halo силуетът + ръбът на кокпита за бордовата камера. Дете на камерата —
- * MeshBasic черно, като сянка срещу светлината (както го вижда пилотът).
- *
- * @returns {THREE.Group}
- */
-function buildHaloOverlay() {
-    const group = new THREE.Group();
-    const material = new THREE.MeshBasicMaterial({ color: 0x0c0d0f });
-
-    // Обръчът на halo-то — горната дъга пред погледа.
-    const hoop = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.024, 8, 28, Math.PI), material);
-    hoop.position.set(0, 0.1, -0.62);
-    group.add(hoop);
-
-    // Централната стойка.
-    const pylon = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.2, 0.05), material);
-    pylon.position.set(0, 0.0, -0.6);
-    group.add(pylon);
-
-    // Ръбът на кокпита — долната дъга.
-    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.08, 6, 24, Math.PI), material);
-    rim.rotation.z = Math.PI;
-    rim.position.set(0, -0.36, -0.78);
-    group.add(rim);
-
-    return group;
 }
 
 /**

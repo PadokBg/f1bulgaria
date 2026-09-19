@@ -1186,7 +1186,7 @@ const REPLAY_SPEEDS = [0.5, 1, 2];
 const REPLAY_CAMERAS = [
     { v: 'tv', l: 'ТВ' },
     { v: 'chase', l: 'Чейс' },
-    { v: 'onboard', l: 'Бордова' },
+    { v: 'onboard', l: 'Кокпит' },
 ];
 const replayProgress = computed(() => numberOrNull(telemetry.value.replayProgress));
 // Секторните тикове по скръбъра: кумулативните сектори / времето на обиколката.
@@ -2736,7 +2736,7 @@ const recenterTilt = () => {
                 <kbd class="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300">→</kbd> завиване
                 (или <kbd class="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300">WASD</kbd>),
                 <kbd class="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300">R</kbd> рестарт,
-                <kbd class="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300">C</kbd> бордова камера,
+                <kbd class="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300">C</kbd> кокпит / външна камера,
                 <kbd class="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300">M</kbd> звук.
                 Трансмисията (авто/ръчна) избираш преди всяка обиколка.
             </p>
@@ -3199,7 +3199,7 @@ const recenterTilt = () => {
                                 class="min-h-11 min-w-11 rounded-lg bg-black/55 px-2 text-sm font-semibold backdrop-blur-sm transition hover:bg-black/75"
                                 :class="settings.camera === 'onboard' ? 'text-white' : 'text-zinc-300'"
                                 :aria-pressed="String(settings.camera === 'onboard')"
-                                aria-label="Бордова камера"
+                                aria-label="Камера от кокпита"
                                 :disabled="replaying"
                                 @click="toggleCamera"
                             >
@@ -3231,10 +3231,10 @@ const recenterTilt = () => {
                             :class="settings.camera === 'onboard' ? 'bg-white/15 text-white' : 'text-zinc-400 hover:text-white'"
                             :aria-pressed="String(settings.camera === 'onboard')"
                             :disabled="replaying"
-                            title="Бордова камера (C)"
+                            title="Кокпит / външна камера (C)"
                             @click="toggleCamera"
                         >
-                            {{ settings.camera === 'onboard' ? 'Бордова' : 'Чейс' }}
+                            {{ settings.camera === 'onboard' ? 'Кокпит' : 'Отвън' }}
                         </button>
                         <button
                             type="button"
@@ -3523,6 +3523,27 @@ const recenterTilt = () => {
                                         :class="controlMode === opt.v ? 'border-[#e10600] bg-[#e10600]/10' : 'border-zinc-700 hover:border-zinc-500'"
                                         :aria-pressed="String(controlMode === opt.v)"
                                         @click="selectControlMode(opt.v)"
+                                    >
+                                        <div class="text-sm font-bold text-zinc-100">{{ opt.l }}</div>
+                                        <div class="mt-0.5 text-[11px] text-zinc-400">{{ opt.h }}</div>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="mt-4" role="group" aria-label="Камера">
+                                <div class="mb-2 text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Камера</div>
+                                <div class="grid grid-cols-2 gap-2">
+                                    <button
+                                        v-for="opt in [
+                                            { v: 'chase', l: 'Отвън', h: 'Виж целия болид' },
+                                            { v: 'onboard', l: 'Кокпит', h: 'През очите на пилота' },
+                                        ]"
+                                        :key="opt.v"
+                                        type="button"
+                                        class="rounded-lg border p-3 text-left transition"
+                                        :class="settings.camera === opt.v ? 'border-[#e10600] bg-[#e10600]/10' : 'border-zinc-700 hover:border-zinc-500'"
+                                        :aria-pressed="String(settings.camera === opt.v)"
+                                        @click="setCamera(opt.v)"
                                     >
                                         <div class="text-sm font-bold text-zinc-100">{{ opt.l }}</div>
                                         <div class="mt-0.5 text-[11px] text-zinc-400">{{ opt.h }}</div>
