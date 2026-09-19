@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Models\User;
 use Illuminate\Support\Facades\Cache;
 use Inertia\Testing\AssertableInertia as Assert;
 
@@ -65,4 +66,35 @@ it('не гърми когато каталогът липсва', function () {
             file_put_contents($index, $backup);
         }
     }
+});
+
+it('крие камерата от кокпита по подразбиране — флагът стига до страницата', function () {
+    $this->get('/game')
+        ->assertInertia(fn (Assert $page) => $page->where('features.game_cockpit', false));
+
+    config(['features.game_cockpit' => true]);
+
+    $this->get('/game')
+        ->assertInertia(fn (Assert $page) => $page->where('features.game_cockpit', true));
+});
+
+it('подава на страницата дали влезлият е админ — само той вижда кокпита при изключен флаг', function () {
+    $this->actingAs(User::factory()->create(['is_admin' => true]))
+        ->get('/game')
+        ->assertInertia(fn (Assert $page) => $page->where('auth.user.is_admin', true));
+
+    $this->actingAs(User::factory()->create(['is_admin' => false]))
+        ->get('/game')
+        ->assertInertia(fn (Assert $page) => $page->where('auth.user.is_admin', false));
+});
+
+it('играта не пуска кокпита без разрешение — нито от менюто, нито от C, нито в реплея', function () {
+    $game = (string) file_get_contents(resource_path('js/game/Game.js'));
+    $page = (string) file_get_contents(resource_path('js/Pages/Game/Index.vue'));
+
+    expect($game)->toContain('this.cockpitAllowed = options.allowCockpit === true;')
+        ->and(substr_count($game, "mode === 'onboard' && !this.cockpitAllowed"))->toBe(2)
+        ->and($game)->toContain("event.code === 'KeyC' && !event.repeat && this.cockpitAllowed")
+        ->and($page)->toContain('allowCockpit: cockpitAllowed.value')
+        ->and($page)->toContain('page.props.features?.game_cockpit === true || authUser.value?.is_admin === true');
 });

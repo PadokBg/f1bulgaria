@@ -26,6 +26,10 @@ return [
     'quiz' => env('FEATURE_QUIZ', false),
     'game' => env('FEATURE_GAME', false),
 
+    // Камерата от кокпита в играта (с живия волан). Изключена → виждат я само
+    // админите, за да се пробва на прод; включена → всички.
+    'game_cockpit' => env('FEATURE_GAME_COCKPIT', false),
+
     // „Данни“ (/danni) — рекапът след всяко състезание от OpenF1, със
     // собствени графики. Виж App\Services\RaceData.
     'data_recap' => env('FEATURE_DATA_RECAP', false),

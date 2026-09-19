@@ -258,6 +258,9 @@ export class Game {
         this.onFinish = onFinish;
         this.simVersion = SIM_VERSION;
         this.onProgress = options.onProgress ?? (() => {});
+        // Камерата от кокпита е зад флаг (features.game_cockpit) — без него
+        // клавишът C и реплеят остават на външните камери.
+        this.cockpitAllowed = options.allowCockpit === true;
         // Една преценка за слабо устройство — ползва се на 5+ места.
         this.lowPower = isLowPowerDevice();
         // Качествени настройки: десктопът тръгва с всичко, телефонът — без
@@ -1271,6 +1274,9 @@ export class Game {
 
     /** Камера на активния реплей: телевизионна, chase или бордова. */
     setReplayCamera(mode) {
+        if (mode === 'onboard' && !this.cockpitAllowed) {
+            return;
+        }
         this.tvDirector?.setCamera(mode);
     }
 
@@ -1317,6 +1323,9 @@ export class Game {
      */
     setCameraMode(mode) {
         if (this.replay || mode === this.cameraMode || (mode !== 'chase' && mode !== 'onboard')) {
+            return;
+        }
+        if (mode === 'onboard' && !this.cockpitAllowed) {
             return;
         }
         this.cameraMode = mode;
@@ -2231,7 +2240,7 @@ export class Game {
             }
 
             // C превключва chase ↔ бордова (halo) камера (не и в ТВ реплей).
-            if (event.code === 'KeyC' && !event.repeat) {
+            if (event.code === 'KeyC' && !event.repeat && this.cockpitAllowed) {
                 this.setCameraMode(this.cameraMode === 'chase' ? 'onboard' : 'chase');
             }
 

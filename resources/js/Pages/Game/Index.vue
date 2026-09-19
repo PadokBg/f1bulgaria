@@ -88,6 +88,9 @@ const featuredTrack = computed(() => orderedTracks.value[0] ?? null);
 
 const page = usePage();
 const authUser = computed(() => page.props.auth?.user ?? null);
+// Камерата от кокпита: за всички при features.game_cockpit, иначе само за
+// админите (пробват я на прод, преди да я пуснем).
+const cockpitAllowed = computed(() => page.props.features?.game_cockpit === true || authUser.value?.is_admin === true);
 const hasPlayed = ref(props.gameFeedback.eligible);
 const feedbackSessionId = ref(props.gameFeedback.last_session_id);
 // Формата се отваря сама само веднъж: докато играчът не е дал мнение (никога)
@@ -438,6 +441,10 @@ const toggleRadioVoice = () => {
 };
 
 const applyCamera = (instance = game.value) => {
+    // Запомненото „Кокпит" от времето, когато беше видим, пада на външната.
+    if (settings.value.camera === 'onboard' && !cockpitAllowed.value) {
+        settings.value.camera = 'chase';
+    }
     instance?.setCameraMode?.(settings.value.camera);
 };
 
@@ -448,6 +455,9 @@ const applyWeather = (instance = game.value) => {
 };
 
 const setCamera = (mode) => {
+    if (mode === 'onboard' && !cockpitAllowed.value) {
+        return;
+    }
     settings.value.camera = mode;
     applyCamera();
 };
@@ -1188,6 +1198,7 @@ const REPLAY_CAMERAS = [
     { v: 'chase', l: 'Чейс' },
     { v: 'onboard', l: 'Кокпит' },
 ];
+const replayCameras = computed(() => REPLAY_CAMERAS.filter((cam) => cam.v !== 'onboard' || cockpitAllowed.value));
 const replayProgress = computed(() => numberOrNull(telemetry.value.replayProgress));
 // Секторните тикове по скръбъра: кумулативните сектори / времето на обиколката.
 const replaySectorTicks = computed(() => {
@@ -1659,6 +1670,7 @@ const startGame = async (track, rivalUserId = null, raceRivalUserId = null) => {
 
         loadProgress.value = 0;
         game.value = new Game(canvas.value, data, onTelemetry, onFinish, {
+            allowCockpit: cockpitAllowed.value,
             onProgress: (fraction) => {
                 if (loadRun === gameLoadRun) {
                     loadProgress.value = fraction;
@@ -2736,7 +2748,7 @@ const recenterTilt = () => {
                 <kbd class="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300">→</kbd> завиване
                 (или <kbd class="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300">WASD</kbd>),
                 <kbd class="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300">R</kbd> рестарт,
-                <kbd class="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300">C</kbd> кокпит / външна камера,
+                <template v-if="cockpitAllowed"><kbd class="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300">C</kbd> кокпит / външна камера,</template>
                 <kbd class="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300">M</kbd> звук.
                 Трансмисията (авто/ръчна) избираш преди всяка обиколка.
             </p>
@@ -3195,6 +3207,7 @@ const recenterTilt = () => {
                         <!-- Телефон: камера + звук са в горния ред (няма клавиши C/M) -->
                         <template v-if="isMobile">
                             <button
+                                v-if="cockpitAllowed"
                                 type="button"
                                 class="min-h-11 min-w-11 rounded-lg bg-black/55 px-2 text-sm font-semibold backdrop-blur-sm transition hover:bg-black/75"
                                 :class="settings.camera === 'onboard' ? 'text-white' : 'text-zinc-300'"
@@ -3226,6 +3239,7 @@ const recenterTilt = () => {
                         aria-label="Бързи настройки"
                     >
                         <button
+                            v-if="cockpitAllowed"
                             type="button"
                             class="rounded px-2 py-1 text-[11px] font-semibold uppercase tracking-wider transition"
                             :class="settings.camera === 'onboard' ? 'bg-white/15 text-white' : 'text-zinc-400 hover:text-white'"
@@ -3530,7 +3544,7 @@ const recenterTilt = () => {
                                 </div>
                             </div>
 
-                            <div class="mt-4" role="group" aria-label="Камера">
+                            <div v-if="cockpitAllowed" class="mt-4" role="group" aria-label="Камера">
                                 <div class="mb-2 text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Камера</div>
                                 <div class="grid grid-cols-2 gap-2">
                                     <button
@@ -3755,7 +3769,7 @@ const recenterTilt = () => {
                                 </div>
                                 <div v-if="gameApi.replayCamera" class="flex gap-1" role="group" aria-label="Камера на повторението">
                                     <button
-                                        v-for="cam in REPLAY_CAMERAS"
+                                        v-for="cam in replayCameras"
                                         :key="cam.v"
                                         type="button"
                                         class="rounded px-2 py-1 text-[11px] font-semibold uppercase tracking-wider transition"
