@@ -56,3 +56,15 @@ it('не презаписва вече съществуващ SVG', function () 
 
     File::deleteDirectory($dir);
 });
+
+it('има контур за всяка писта от календара — hero-то не пада на името', function () {
+    // Пистите на играта са календарът на сезона (Jolpica circuitId), а
+    // hero-то търси resources/svg/circuits/{circuit_slug}.svg. Баку и Лас
+    // Вегас бяха изключени по стар списък, макар bacinger вече да ги има.
+    $missing = collect(array_keys(config('game.tracks')))
+        ->reject(fn (string $slug): bool => File::exists(resource_path("svg/circuits/{$slug}.svg")))
+        ->values()
+        ->all();
+
+    expect($missing)->toBe([]);
+});

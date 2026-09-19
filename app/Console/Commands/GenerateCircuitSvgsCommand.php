@@ -33,6 +33,7 @@ class GenerateCircuitSvgsCommand extends Command
     private const MAP = [
         'bahrain' => 'bh-2002',
         'jeddah' => 'sa-2021',
+        'baku' => 'az-2016',
         'albert_park' => 'au-1953',
         'suzuka' => 'jp-1962',
         'shanghai' => 'cn-2004',
@@ -53,16 +54,9 @@ class GenerateCircuitSvgsCommand extends Command
         'interlagos' => 'br-1940',
         'losail' => 'qa-2004',
         'yas_marina' => 'ae-2009',
+        'vegas' => 'us-2023',
         'madring' => 'es-2026',
     ];
-
-    /**
-     * Писти от 2026 календара, които НЯМАТ outline в bacinger GeoJSON.
-     * Hero-то им показва fallback (име на пистата вместо track анимация).
-     *
-     * @var array<int, string>
-     */
-    private const UNAVAILABLE = ['baku', 'vegas'];
 
     public function handle(): int
     {
@@ -107,11 +101,10 @@ class GenerateCircuitSvgsCommand extends Command
         $this->info('Създадени: '.(count($created) ? implode(', ', $created) : '0'));
         $this->line('Пропуснати (вече съществуват): '.count($skipped));
 
+        // Hero-то показва името на пистата вместо анимация, ако SVG липсва.
         if ($missing !== []) {
             $this->warn('Липсват в GeoJSON (ще ползват fallback): '.implode(', ', $missing));
         }
-
-        $this->line('Без outline в източника (fallback с име): '.implode(', ', self::UNAVAILABLE));
 
         return self::SUCCESS;
     }
