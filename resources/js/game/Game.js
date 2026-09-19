@@ -68,7 +68,7 @@ import { hashString, mulberry32 } from './random.js';
 import { createEngineSound } from './sound.js';
 import { isMobileDevice } from './device.js';
 import { shouldCaptureGameKey } from './keyboard.js';
-import { advanceQualityGovernor, GOVERNOR } from './qualityGovernor.js';
+import { advanceQualityGovernor, createCadenceState, GOVERNOR, resetCadenceForRun, restartCadenceWindow } from './qualityGovernor.js';
 import { createLightweightAa } from './lightweightAa.js';
 import { prepareTrack, projectOnTrack } from './track.js';
 import { createDrivetrain, shiftDown, shiftUp, updateDrivetrain } from './drivetrain.js';
@@ -306,6 +306,7 @@ export class Game {
         this.outlierTimer = 0;
         this.autoQualityStage = 0;
         this.autoQualitySlowSeconds = 0;
+        Object.assign(this, createCadenceState());
         this.renderer.setPixelRatio(this.baseDpr);
 
         // Браузърът може да отнеме WebGL контекста (рестарт на драйвера, липса
@@ -724,6 +725,7 @@ export class Game {
         // и EMA-то още се сийдва — не е сигнал за стъпка.
         this.scaleCooldown = GOVERNOR.downCooldown;
         this.autoQualitySlowSeconds = 0;
+        resetCadenceForRun(this);
         this.#resetPlayerRace();
         this.sound.start();
         this.onLaunch(this.launch ? 0 : null);
@@ -879,6 +881,7 @@ export class Game {
         this.#notify(this.onPauseChange, false);
         this.running = true;
         this.lastFrame = performance.now();
+        restartCadenceWindow(this);
         if (this.replay) {
             this.sound.setBroadcast(true);
         } else {
@@ -1209,6 +1212,8 @@ export class Game {
         if (adaptiveChanged || quality.adaptive !== true) {
             this.autoQualityStage = 0;
             this.autoQualitySlowSeconds = 0;
+            // Ръчен избор сменя цената на кадъра: заключената каденца не важи.
+            Object.assign(this, createCadenceState());
         }
         clampAdaptiveQuality(quality, this.autoQualityStage);
         if (this.lowPower) {
@@ -1226,6 +1231,8 @@ export class Game {
         if (quality.dpr !== previous.dpr) {
             this.baseDpr = clamp(quality.dpr, 0.5, 3);
             quality.dpr = this.baseDpr;
+            // Друг пикселен бюджет — преценката за каденцата е правена на стария.
+            Object.assign(this, createCadenceState());
             this.#applyRenderScale();
         }
         if (quality.particles !== previous.particles) {
@@ -1954,6 +1961,9 @@ export class Game {
         const change = advanceQualityGovernor(this, rawDt, {
             adaptive: this.quality.adaptive,
             lowPower: this.lowPower,
+            // Светлините и реплеят рисуват друга сцена: кадрите им хранят
+            // средното, но не решават за каденцата.
+            racing: !this.launch && !this.replay,
         });
         if (change.stageChanged) {
             this.setQuality(this.autoQualityStage === 1 ? {
