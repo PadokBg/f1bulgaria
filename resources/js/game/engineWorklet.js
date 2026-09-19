@@ -312,10 +312,13 @@ function bandpassCoefficients(out, offset, frequency, q, sampleRate) {
 export class EngineModel {
     /**
      * @param {number} sampleRate
-     * @param {{ engine?: 'v6-hybrid'|'v10', seed?: number, tuning?: object }} [options]
+     * @param {{ engine?: 'v6-hybrid'|'v10', seed?: number, tuning?: object, lite?: boolean }} [options]
+     *   lite: само ауспухът — за колата на съперника отвън, където
+     *   всмукването и механиката не се чуват (~40 % по-евтино).
      */
     constructor(sampleRate, options = {}) {
         this.sampleRate = sampleRate;
+        this.lite = options.lite === true;
         const base = ENGINE_PRESETS[options.engine] ?? V6_HYBRID_PRESET;
         this.tuning = { ...base, ...(options.tuning ?? {}) };
         this.seed = (options.seed ?? 0x9e3779b9) >>> 0 || 1;
@@ -632,6 +635,7 @@ export class EngineModel {
         const cylinderCount = this.cylinderCount;
         const bankSize = this.bankSize;
         const turbo = t.turbo === true;
+        const lite = this.lite;
         const damping = t.pipeDamping;
         const pipeGain = t.pipeGain;
         const flowNoise = t.flowNoise;
@@ -803,6 +807,10 @@ export class EngineModel {
                     bankSumB += arrivingAtCollector;
                 }
 
+                if (lite) {
+                    continue;
+                }
+
                 // ── Всмукване: вакуумен импулс при отворен клапан ──
                 const intakeValve = intakeValveTable[index] + (intakeValveTable[index + 1] - intakeValveTable[index]) * frac;
                 const runnerRead = (w - runnerDelay[c]) & MASK;
@@ -919,57 +927,62 @@ export class EngineModel {
                 }
             }
 
-            // ── Въздушна кутия: Хелмхолцов резонанс + директно излъчване ──
-            const airboxOut = airbox[0] * intakeFlow + airboxState[0];
-            airboxState[0] = -airbox[2] * airboxOut + airboxState[1];
-            airboxState[1] = airbox[1] * intakeFlow - airbox[3] * airboxOut;
-            const intakeDirect = intakeFlow - this.previousIntake;
-            this.previousIntake = intakeFlow;
-            const intakeRaw = (airboxLevel * airboxOut + runnerLevel * intakeDirect) * intakeMix;
-            intakeToneState[0] += (intakeRaw - intakeToneState[0]) * intakeToneCoefficient;
-            intakeToneState[1] += (intakeToneState[0] - intakeToneState[1]) * intakeToneCoefficient;
-            const intake = intakeToneState[1];
+            // ── Всмукване и механика (олекотеният съперник ги прескача) ──
+            let intake = 0;
+            let mech = 0;
+            if (!lite) {
+                // Въздушна кутия: Хелмхолцов резонанс + директно излъчване.
+                const airboxOut = airbox[0] * intakeFlow + airboxState[0];
+                airboxState[0] = -airbox[2] * airboxOut + airboxState[1];
+                airboxState[1] = airbox[1] * intakeFlow - airbox[3] * airboxOut;
+                const intakeDirect = intakeFlow - this.previousIntake;
+                this.previousIntake = intakeFlow;
+                const intakeRaw = (airboxLevel * airboxOut + runnerLevel * intakeDirect) * intakeMix;
+                intakeToneState[0] += (intakeRaw - intakeToneState[0]) * intakeToneCoefficient;
+                intakeToneState[1] += (intakeToneState[0] - intakeToneState[1]) * intakeToneCoefficient;
+                intake = intakeToneState[1];
 
-            // ── Блок, зъбни колела, турбо свирене, MGU-K ──
-            let block = 0;
-            for (let k = 0; k < 12; k += 4) {
-                const y = blockCoefficients[k] * burn + blockState[k];
-                blockState[k] = -blockCoefficients[k + 2] * y + blockState[k + 1];
-                blockState[k + 1] = blockCoefficients[k + 1] * burn - blockCoefficients[k + 3] * y;
-                block += y;
-            }
-            const revsPerSample = cyclesPerSample * 2;
-            whinePhase[0] += whineOrderA * revsPerSample;
-            if (whinePhase[0] >= 1) {
-                whinePhase[0] -= Math.floor(whinePhase[0]);
-            }
-            whinePhase[1] += whineOrderB * revsPerSample;
-            if (whinePhase[1] >= 1) {
-                whinePhase[1] -= Math.floor(whinePhase[1]);
-            }
-            let mech =
-                block * blockLevel +
-                (Math.sin(2 * Math.PI * whinePhase[0]) + Math.sin(2 * Math.PI * whinePhase[1])) * whineAmount * (0.6 + 0.4 * load);
-            if (turbo) {
-                this.whistlePhase += whistleStep;
-                if (this.whistlePhase >= 1) {
-                    this.whistlePhase -= 1;
+                // ── Блок, зъбни колела, турбо свирене, MGU-K ──
+                let block = 0;
+                for (let k = 0; k < 12; k += 4) {
+                    const y = blockCoefficients[k] * burn + blockState[k];
+                    blockState[k] = -blockCoefficients[k + 2] * y + blockState[k + 1];
+                    blockState[k + 1] = blockCoefficients[k + 1] * burn - blockCoefficients[k + 3] * y;
+                    block += y;
                 }
-                mech += Math.sin(2 * Math.PI * this.whistlePhase) * whistleAmount;
-                // MGU-K: основната електрическа честота + хармоник на инвертора;
-                // при зареждане (−) тембърът е по-остър.
-                this.mgukPhase += mgukStep;
-                if (this.mgukPhase >= 1) {
-                    this.mgukPhase -= 1;
+                const revsPerSample = cyclesPerSample * 2;
+                whinePhase[0] += whineOrderA * revsPerSample;
+                if (whinePhase[0] >= 1) {
+                    whinePhase[0] -= Math.floor(whinePhase[0]);
                 }
-                const angle = 2 * Math.PI * this.mgukPhase;
-                const torque = mguk < 0 ? -mguk : mguk;
-                mech +=
-                    (Math.sin(angle) + 0.35 * Math.sin(2 * angle) + (mguk < 0 ? 0.3 * Math.sin(3 * angle) : 0)) *
-                    torque *
-                    mgukLevel;
+                whinePhase[1] += whineOrderB * revsPerSample;
+                if (whinePhase[1] >= 1) {
+                    whinePhase[1] -= Math.floor(whinePhase[1]);
+                }
+                mech =
+                    block * blockLevel +
+                    (Math.sin(2 * Math.PI * whinePhase[0]) + Math.sin(2 * Math.PI * whinePhase[1])) * whineAmount * (0.6 + 0.4 * load);
+                if (turbo) {
+                    this.whistlePhase += whistleStep;
+                    if (this.whistlePhase >= 1) {
+                        this.whistlePhase -= 1;
+                    }
+                    mech += Math.sin(2 * Math.PI * this.whistlePhase) * whistleAmount;
+                    // MGU-K: основната електрическа честота + хармоник на инвертора;
+                    // при зареждане (−) тембърът е по-остър.
+                    this.mgukPhase += mgukStep;
+                    if (this.mgukPhase >= 1) {
+                        this.mgukPhase -= 1;
+                    }
+                    const angle = 2 * Math.PI * this.mgukPhase;
+                    const torque = mguk < 0 ? -mguk : mguk;
+                    mech +=
+                        (Math.sin(angle) + 0.35 * Math.sin(2 * angle) + (mguk < 0 ? 0.3 * Math.sin(3 * angle) : 0)) *
+                        torque *
+                        mgukLevel;
+                }
+                mech *= mechLevel;
             }
-            mech *= mechLevel;
 
             // ── Микс: двете банки (или опашка + wastegate) в стерео ──
             // Излъчването (производна) е с наклон +6 dB/окт — въздухът и

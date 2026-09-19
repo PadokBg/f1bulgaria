@@ -115,6 +115,16 @@ const MODEL_CUT_SECONDS = 0.035;
 const MODEL_BLIP_SECONDS = 0.09;
 
 /**
+ * Съперникът: олекотен модел (само ауспухът — отвън всмукването и
+ * механиката не се чуват) на най-близкия бот, с друг seed — друг двигател.
+ * Ниво спрямо собствения двигател и тембърът по разстоянието (Hz на пълна
+ * близост над базовите 900).
+ */
+const RIVAL_MODEL_LEVEL = 0.45;
+const RIVAL_MODEL_SEED = 0x51f15eed;
+const RIVAL_MODEL_CUTOFF_SPAN = 4200;
+
+/**
  * Миксът на модела по камера: отвън доминира ауспухът, в кокпита —
  * всмукването (въздушната кутия е над главата на пилота) и механиката (при
  * хибрида там са и турбото, и воят на MGU-K — затова mech е по-силен).
@@ -343,6 +353,14 @@ export function createEngineSound(options = {}) {
     let modelFailed = false;
     let modelLoadRatio = 0;
     let modelLoadStrikes = 0;
+    // Гласът на съперника: създава се при първия бот в ухото, пада пръв,
+    // ако аудио нишката не смогва (собственият двигател е по-важен).
+    let rivalModel = null;
+    let rivalModelFailed = false;
+    let rivalLoadRatio = 0;
+    let lastRivalUpdateAt = 0;
+    const rivalHarvestState = { liftSeconds: 0 };
+    const rivalDemand = { load: 0, mguk: 0 };
     let broadcastRpm = 0;
     let broadcastLoad = 0.8;
     // Хибридът: време от отпускането и какво иска двигателят (без алокации в кадъра).
@@ -853,6 +871,19 @@ export function createEngineSound(options = {}) {
             rivalGain.connect(mix);
         }
 
+        // Гласът на съперника от физическия модел: lowpass по разстоянието,
+        // сила по близостта, панорама по страната (driveRivalModel).
+        const rivalModelTone = biquad('lowpass', 900, 0.8);
+        const rivalModelGain = gain(0);
+        const rivalModelPan = hasPanner ? ctx.createStereoPanner() : null;
+        rivalModelTone.connect(rivalModelGain);
+        if (rivalModelPan) {
+            rivalModelGain.connect(rivalModelPan);
+            rivalModelPan.connect(mix);
+        } else {
+            rivalModelGain.connect(mix);
+        }
+
         for (const src of sources) {
             src.start(t0);
         }
@@ -926,21 +957,39 @@ export function createEngineSound(options = {}) {
             broadcastFilter,
             broadcastGain,
             broadcastPan,
+            rivalModelTone,
+            rivalModelGain,
+            rivalModelPan,
         };
 
         loadModel(ctx);
     };
 
     // ── Физически модел: асинхронно зареждане, отчети за натоварването ──────
+    const stopWorklet = (instance) => {
+        try {
+            instance.node.port.onmessage = null;
+            instance.node.port.postMessage({ type: 'stop' });
+            instance.node.disconnect();
+        } catch {
+            // Контекстът вече е затворен.
+        }
+    };
+
+    const dropRivalModel = () => {
+        rivalModelFailed = true;
+        if (rivalModel) {
+            stopWorklet(rivalModel);
+        }
+        rivalModel = null;
+        rivalLoadRatio = 0;
+    };
+
     const dropModel = () => {
         modelFailed = true;
+        dropRivalModel();
         if (model) {
-            try {
-                model.node.port.postMessage({ type: 'stop' });
-                model.node.disconnect();
-            } catch {
-                // Контекстът вече е затворен.
-            }
+            stopWorklet(model);
         }
         model = null;
     };
@@ -950,11 +999,89 @@ export function createEngineSound(options = {}) {
             return;
         }
         modelLoadRatio = data.ratio;
-        // Два поредни тежки отчета: телефонът не смогва и звукът ще пука —
-        // осцилаторите са по-добри от накъсан модел.
-        modelLoadStrikes = data.ratio > MODEL_MAX_LOAD ? modelLoadStrikes + 1 : 0;
+        // Два поредни тежки отчета (двата worklet-а заедно): телефонът не
+        // смогва и звукът ще пука. Първо пада гласът на съперника, после и
+        // собственият модел — осцилаторите са по-добри от накъсан звук.
+        const total = modelLoadRatio + (rivalModel ? rivalLoadRatio : 0);
+        modelLoadStrikes = total > MODEL_MAX_LOAD ? modelLoadStrikes + 1 : 0;
         if (modelLoadStrikes >= 2) {
-            dropModel();
+            modelLoadStrikes = 0;
+            if (rivalModel) {
+                dropRivalModel();
+            } else {
+                dropModel();
+            }
+        }
+    };
+
+    /**
+     * Олекотеният модел за съперника — в същия контекст, модулът вече е
+     * зареден от собствения двигател.
+     */
+    const ensureRivalModel = () => {
+        if (rivalModel || rivalModelFailed || !model || !ctx || !nodes) {
+            return;
+        }
+        try {
+            const node = new AudioWorkletNode(ctx, 'padok-engine', {
+                numberOfInputs: 0,
+                numberOfOutputs: 1,
+                outputChannelCount: [2],
+                processorOptions: { engine: ERA.model, seed: RIVAL_MODEL_SEED, lite: true },
+            });
+            node.connect(nodes.rivalModelTone);
+            node.port.onmessage = (event) => {
+                if (event.data?.type === 'load' && Number.isFinite(event.data.ratio)) {
+                    rivalLoadRatio = event.data.ratio;
+                }
+            };
+            node.onprocessorerror = dropRivalModel;
+            const param = (name) => node.parameters.get(name);
+            const t = ctx.currentTime;
+            // Отвън: само ауспухът; ширината е на панорамата, не на банките.
+            param('exhaust').setValueAtTime(1, t);
+            param('intake').setValueAtTime(0, t);
+            param('mech').setValueAtTime(0, t);
+            param('width').setValueAtTime(0.15, t);
+            rivalModel = { node, rpm: param('rpm'), load: param('load'), mguk: param('mguk') };
+        } catch {
+            rivalModelFailed = true;
+        }
+    };
+
+    /**
+     * Най-близкият бот през физическия модел: сила и тембър по разстоянието,
+     * панорама, Доплер върху оборотите (височината на модела ги следва).
+     */
+    const driveRivalModel = (distance, speed, pan, closing, rpm, shift, throttle) => {
+        const t = ctx.currentTime;
+        const audible = Number.isFinite(distance) && distance < RIVAL_RANGE;
+        const proximity = audible ? Math.max(0, 1 - distance / RIVAL_RANGE) ** 2 : 0;
+        const effectiveRpm = rpm ?? 4000 + Math.min(1, speed / 92) * (SHIFT_RPM - 4000);
+        const doppler = 1 + clamp((3 * closing) / 340, -0.3, 0.3);
+        const dt = lastRivalUpdateAt > 0 ? Math.min(0.1, t - lastRivalUpdateAt) : 1 / 60;
+        lastRivalUpdateAt = t;
+        if (ERA.turbo) {
+            hybridEngineDemand(rivalHarvestState, throttle ?? 1, 0, speed, dt, rivalDemand, harvestLoad);
+        } else {
+            rivalDemand.load = clamp01(throttle ?? 1);
+            rivalDemand.mguk = 0;
+        }
+
+        setP(rivalModel.rpm, effectiveRpm * ERA.rpmScale * doppler, 0.03, t);
+        setP(rivalModel.load, rivalDemand.load, 0.03, t);
+        setP(rivalModel.mguk, rivalDemand.mguk, 0.05, t);
+        setP(nodes.rivalModelTone.frequency, 900 + RIVAL_MODEL_CUTOFF_SPAN * proximity, 0.06, t);
+        setP(nodes.rivalModelGain.gain, proximity * MODEL_LEVEL * RIVAL_MODEL_LEVEL, 0.06, t);
+        if (nodes.rivalModelPan) {
+            setP(nodes.rivalModelPan.pan, clamp(pan, -1, 1), 0.06, t);
+        }
+        // Осцилаторният глас мълчи, докато свири моделът.
+        setP(nodes.rivalGain.gain, 0, 0.05, t);
+        if (shift > 0) {
+            rivalModel.node.port.postMessage({ type: 'cut', at: t, duration: MODEL_CUT_SECONDS });
+        } else if (shift < 0) {
+            rivalModel.node.port.postMessage({ type: 'blip', at: t, duration: MODEL_BLIP_SECONDS });
         }
     };
 
@@ -1323,6 +1450,8 @@ export function createEngineSound(options = {}) {
                 bridgeUntil = 0;
                 // Лек фонов жагор в ТВ картината.
                 setP(nodes.crowdGain.gain, 0.05, 0.4, t);
+                // Съперникът в ухото на пилота не е част от ТВ кадъра.
+                setP(nodes.rivalModelGain.gain, 0, 0.05, t);
             } else {
                 // Каналът не бива да остане на нивото на последния fly-by.
                 setP(nodes.rivalGain.gain, 0, 0.05, t);
@@ -1771,10 +1900,24 @@ export function createEngineSound(options = {}) {
          * @param {number} [closing] Скорост на сближаване, m/s (+ = приближава)
          * @param {number} [rpm] Оборотите ѝ (opp.drivetrain.visualRpm)
          * @param {number} [shift] +1/−1 в кадъра на смяна на предавка, иначе 0
+         * @param {number} [throttle] Газта ѝ 0..1 (товар за физическия модел)
          */
-        updateRival(distance, speed, pan, closing = 0, rpm = undefined, shift = 0) {
+        updateRival(distance, speed, pan, closing = 0, rpm = undefined, shift = 0, throttle = undefined) {
             if (!ready() || broadcast) {
                 return;
+            }
+            // Гласът от модела тръгва едва когато има бот в ухото — соло
+            // обиколката не плаща за втори worklet.
+            if (modelLive() && Number.isFinite(distance) && distance < RIVAL_RANGE) {
+                ensureRivalModel();
+            }
+            if (modelLive() && rivalModel) {
+                driveRivalModel(distance, speed, pan, closing, rpm, shift, throttle);
+
+                return;
+            }
+            if (nodes.rivalModelGain) {
+                setP(nodes.rivalModelGain.gain, 0, 0.05, ctx.currentTime);
             }
             driveRival(distance, speed, pan, closing, rpm, shift, RIVAL_RANGE, 3, 0.22, 2200);
         },
@@ -1848,10 +1991,15 @@ export function createEngineSound(options = {}) {
         /**
          * Състоянието на модела: свири ли и колко от аудио нишката ползва.
          *
-         * @returns {{ active: boolean, failed: boolean, load: number }}
+         * @returns {{ active: boolean, failed: boolean, load: number, rival: boolean }}
          */
         engineInfo() {
-            return { active: modelLive(), failed: modelFailed, load: modelLoadRatio };
+            return {
+                active: modelLive(),
+                failed: modelFailed,
+                load: modelLoadRatio + (rivalModel ? rivalLoadRatio : 0),
+                rival: rivalModel !== null,
+            };
         },
 
         /**
@@ -1879,9 +2027,12 @@ export function createEngineSound(options = {}) {
                 clearTimeout(suspendTimer);
                 suspendTimer = null;
             }
+            if (rivalModel) {
+                stopWorklet(rivalModel);
+            }
+            rivalModel = null;
             if (model) {
-                model.node.port.onmessage = null;
-                model.node.port.postMessage({ type: 'stop' });
+                stopWorklet(model);
             }
             model = null;
             if (ctx) {

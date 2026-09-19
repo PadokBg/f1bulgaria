@@ -3461,6 +3461,9 @@ export class Game {
      */
     #updateRivalSound(render) {
         if (this.opponents.length === 0) {
+            // Без съперници (соло след състезание) гласът не бива да остане
+            // на нивото от последния кадър с бот.
+            this.sound.updateRival(Infinity, 0, 0);
             return;
         }
 
@@ -3468,6 +3471,7 @@ export class Game {
         let speed = 0;
         let nx = 0;
         let nz = 0;
+        let closest = null;
 
         for (const opp of this.opponents) {
             const s = opp.sim.state;
@@ -3477,6 +3481,7 @@ export class Game {
                 speed = Math.abs(s.vForward);
                 nx = s.x;
                 nz = s.z;
+                closest = opp;
             }
         }
 
@@ -3502,7 +3507,18 @@ export class Game {
         this.prevRivalDistance = Number.isFinite(nearest) ? nearest : null;
         this.prevRivalTime = performance.now();
 
-        this.sound.updateRival(nearest, speed, pan, closing);
+        // Обороти, смяна и газ на бота — физическият модел звучи като неговия
+        // двигател, не като псевдо-обороти от скоростта.
+        const train = closest?.drivetrain;
+        this.sound.updateRival(
+            nearest,
+            speed,
+            pan,
+            closing,
+            train?.visualRpm,
+            train?.shifted ?? 0,
+            closest?.sim.state.throttlePedal ?? closest?.input?.throttle
+        );
     }
 
     /**
