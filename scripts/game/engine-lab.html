@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="bg">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Лаборатория за двигателя</title>
+<style>
+    :root { color-scheme: dark; --bg: #0c0e12; --panel: #161a20; --line: #2a3038; --text: #e8eaed; --muted: #9aa3ad; --red: #e10600; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif; }
+    main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 60px; }
+    h1 { margin: 0 0 4px; font-size: 22px; }
+    h1 span { color: var(--red); }
+    p.lead { margin: 0 0 18px; color: var(--muted); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+    section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+    section h2 { margin: 0 0 10px; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+    button, select { background: #222831; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font: inherit; cursor: pointer; }
+    button.primary { background: var(--red); border-color: var(--red); font-weight: 700; }
+    button[aria-pressed="true"] { border-color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
+    label.slider { display: grid; grid-template-columns: 180px 1fr 64px; gap: 8px; align-items: center; margin: 4px 0; }
+    label.slider output { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+    input[type="range"] { width: 100%; accent-color: var(--red); }
+    .readout { font-variant-numeric: tabular-nums; font-size: 28px; font-weight: 800; }
+    .status { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .bad { color: #ff8a80; }
+    textarea { width: 100%; min-height: 90px; background: #0f1216; color: var(--text); border: 1px solid var(--line); border-radius: 8px; font: 12px/1.4 ui-monospace, monospace; }
+    @media (max-width: 520px) { label.slider { grid-template-columns: 1fr 1fr 52px; } }
+</style>
+</head>
+<body>
+<main>
+    <h1>Лаборатория за двигателя<span>.</span></h1>
+    <p class="lead">Истинският <code>sound.js</code> на играта: физическият модел на V6 турбо хибрида от 2026 г. срещу стария синтез, по един и същ запис на обиколка. Слушалки препоръчителни.</p>
+
+    <div class="grid">
+        <section>
+            <h2>Звук</h2>
+            <div class="row">
+                <button id="start" class="primary" type="button">▶ Пусни</button>
+                <button id="stop" type="button">■ Спри</button>
+            </div>
+            <div class="row" role="group" aria-label="Двигател">
+                <button type="button" data-engine="model" aria-pressed="true">Физически модел</button>
+                <button type="button" data-engine="synth" aria-pressed="false">Стар синтез</button>
+            </div>
+            <div class="row" role="group" aria-label="Камера">
+                <button type="button" data-camera="chase" aria-pressed="true">Отвън</button>
+                <button type="button" data-camera="onboard" aria-pressed="false">Бордова</button>
+            </div>
+            <label class="slider">Сила <input id="volume" type="range" min="0" max="1" step="0.01" value="0.8"><output>0.80</output></label>
+            <label class="slider">Товар при зареждане (2026) <input id="harvest" type="range" min="0" max="1" step="0.05" value="0.6"><output>0.60</output></label>
+            <p class="status" id="engine-status">Спрян.</p>
+        </section>
+
+        <section>
+            <h2>Каране</h2>
+            <div class="row" role="group" aria-label="Източник">
+                <button type="button" data-source="lap" aria-pressed="true">Обиколка (автопилот)</button>
+                <button type="button" data-source="manual" aria-pressed="false">Ръчно</button>
+                <select id="track" aria-label="Писта">
+                    <option value="monza">Монца</option>
+                    <option value="spa">Спа</option>
+                    <option value="monaco">Монако</option>
+                    <option value="silverstone">Силвърстоун</option>
+                    <option value="suzuka">Сузука</option>
+                    <option value="interlagos">Интерлагос</option>
+                    <option value="bahrain">Бахрейн</option>
+                </select>
+            </div>
+            <div class="readout"><span id="rpm-readout">—</span> <small class="status">об/мин · газ <span id="throttle-readout">—</span></small></div>
+            <label class="slider">Обороти (стрелка) <input id="rpm" type="range" min="4000" max="15000" step="50" value="9000"><output>9000</output></label>
+            <label class="slider">Газ <input id="throttle" type="range" min="0" max="1" step="0.01" value="1"><output>1.00</output></label>
+            <div class="row">
+                <label><input id="limiter" type="checkbox"> Лимитер</label>
+                <button type="button" id="shift-up">Смяна ↑</button>
+                <button type="button" id="shift-down">Смяна ↓</button>
+                <button type="button" id="pops">Пукоти</button>
+            </div>
+        </section>
+    </div>
+
+    <section style="margin-top:14px">
+        <h2>Настройка на модела (на живо)</h2>
+        <div id="tuning"></div>
+        <div class="row" style="margin-top:10px">
+            <button type="button" id="copy">Копирай настройките</button>
+            <button type="button" id="reset">Нулирай</button>
+        </div>
+        <textarea id="preset" readonly aria-label="Променените настройки"></textarea>
+    </section>
+</main>
+
+<script type="module">
+import { createEngineSound } from '/resources/js/game/sound.js';
+import { V6_HYBRID_PRESET as PRESET } from '/resources/js/game/engineWorklet.js';
+
+/** [ключ, мин, макс, стъпка, етикет] — най-влиятелните параметри на тембъра. */
+const TUNABLES = [
+    ['primaryLength', 0.3, 0.9, 0.005, 'Първични тръби, m'],
+    ['tailLength', 0.08, 0.6, 0.005, 'Колектор → турбина, m'],
+    ['tailpipeLength', 0.15, 0.9, 0.005, 'Опашка след турбината, m'],
+    ['turbineReflection', 0, 0.8, 0.01, 'Турбина: отражение'],
+    ['turbineExtraction', 0, 0.8, 0.01, 'Турбина: изсмукана енергия'],
+    ['turbineCutoff', 800, 6000, 50, 'Турбина: заглаждане, Hz'],
+    ['spoolUpSeconds', 0.1, 1.2, 0.01, 'Турбо: закъснение, s'],
+    ['wastegateLevel', 0, 3, 0.05, 'Wastegate тръба'],
+    ['turboWhistle', 0, 0.08, 0.001, 'Турбо свирене'],
+    ['mgukLevel', 0, 0.1, 0.001, 'MGU-K вой'],
+    ['gasSpeed', 400, 700, 5, 'Звук в газа, m/s'],
+    ['tailArea', 1, 5, 0.1, 'Колектор (сечение)'],
+    ['bankSkew', 0, 0.06, 0.001, 'Асиметрия на банките'],
+    ['exhaustOpen', 90, 140, 1, 'Отваряне на клапана, °'],
+    ['blowdownRiseDeg', 3, 25, 0.5, 'Нарастване на импулса, °'],
+    ['blowdownDecayMs', 0.15, 1, 0.01, 'Затихване на импулса, ms'],
+    ['displacement', 0, 0.6, 0.01, 'Изтласкване'],
+    ['flowNoise', 0, 0.6, 0.01, 'Турбулентност (ръб)'],
+    ['jitter', 0, 0.2, 0.005, 'Разлика м/у цикли (газ)'],
+    ['jitterLight', 0, 0.4, 0.01, 'Разлика м/у цикли (без газ)'],
+    ['openReflection', 0.5, 0.95, 0.01, 'Отражение в края'],
+    ['openCutoff', 800, 6000, 50, 'Край: гранична честота, Hz'],
+    ['pipeDamping', 0.5, 1, 0.01, 'Загуби в тръбите (LP)'],
+    ['exhaustToneHz', 2000, 12000, 100, 'Тон на ауспуха, Hz'],
+    ['exhaustLevel', 2, 20, 0.5, 'Ниво ауспух'],
+    ['intakeLevel', 0, 2.5, 0.05, 'Ниво всмукване'],
+    ['runnerLevel', 0, 15, 0.5, 'Фунии (вой)'],
+    ['airboxLevel', 0, 4, 0.1, 'Въздушна кутия (тътен)'],
+    ['airboxHz', 60, 250, 1, 'Резонанс на кутията, Hz'],
+    ['blockLevel', 0, 1, 0.01, 'Блок'],
+    ['whineLevel', 0, 0.05, 0.001, 'Зъбни колела'],
+    ['popLevel', 0, 1, 0.01, 'Пукоти'],
+    ['burblesPerSecond', 0, 20, 0.5, 'Пукоти/s без газ'],
+    ['loudnessSlope', 0, 1, 0.01, 'Изравняване по обороти'],
+    ['outputGain', 0.2, 3, 0.05, 'Общо ниво на модела'],
+];
+
+const $ = (selector) => document.querySelector(selector);
+const state = { source: 'lap', camera: 'chase', model: true, lap: null, lapStart: 0, lastFrame: -1, tuning: {} };
+let sound = null;
+let running = false;
+let manualRpm = 9000;
+
+const decimals = (step) => (String(step).split('.')[1] ?? '').length;
+const bindOutput = (input) => {
+    const output = input.parentElement.querySelector('output');
+    const update = () => { output.textContent = Number(input.value).toFixed(decimals(input.step)); };
+    input.addEventListener('input', update);
+    update();
+};
+document.querySelectorAll('label.slider input').forEach(bindOutput);
+
+const pressGroup = (attribute, value) => {
+    document.querySelectorAll(`[data-${attribute}]`).forEach((button) => {
+        button.setAttribute('aria-pressed', String(button.dataset[attribute] === value));
+    });
+};
+
+// ── Настройки на модела ──────────────────────────────────────────────────
+const tuningRoot = $('#tuning');
+for (const [key, min, max, step, label] of TUNABLES) {
+    const row = document.createElement('label');
+    row.className = 'slider';
+    row.textContent = label;
+    const input = document.createElement('input');
+    Object.assign(input, { type: 'range', min, max, step, value: PRESET[key] });
+    input.dataset.key = key;
+    const output = document.createElement('output');
+    row.append(input, output);
+    tuningRoot.append(row);
+    bindOutput(input);
+    input.addEventListener('input', () => {
+        const value = Number(input.value);
+        if (value === PRESET[key]) {
+            delete state.tuning[key];
+        } else {
+            state.tuning[key] = value;
+        }
+        sound?.tuneEngine({ [key]: value });
+        $('#preset').value = JSON.stringify(state.tuning, null, 4);
+    });
+}
+
+$('#copy').addEventListener('click', async () => {
+    const text = JSON.stringify(state.tuning, null, 4);
+    $('#preset').value = text;
+    try {
+        await navigator.clipboard.writeText(text);
+        $('#copy').textContent = 'Копирано ✓';
+    } catch {
+        $('#preset').select();
+        $('#copy').textContent = 'Маркирано — Ctrl+C';
+    }
+    setTimeout(() => { $('#copy').textContent = 'Копирай настройките'; }, 1600);
+});
+
+$('#reset').addEventListener('click', () => {
+    tuningRoot.querySelectorAll('input').forEach((input) => {
+        input.value = PRESET[input.dataset.key];
+        input.dispatchEvent(new Event('input'));
+    });
+    state.tuning = {};
+    $('#preset').value = '';
+});
+
+// ── Звук ─────────────────────────────────────────────────────────────────
+const ensureSound = () => {
+    if (!sound) {
+        sound = createEngineSound({ workletUrl: '/resources/js/game/engineWorklet.js' });
+        sound.setMuted(false);
+    }
+    sound.setVolume(Number($('#volume').value));
+    sound.setHarvestLoad(Number($('#harvest').value));
+    sound.setEngineModel(state.model);
+};
+
+$('#start').addEventListener('click', () => {
+    ensureSound();
+    sound.start();
+    running = true;
+    state.lapStart = performance.now();
+    state.lastFrame = -1;
+    // Настройките, пипнати преди зареждането на модела, се пращат, щом е готов.
+    const pushTuning = () => {
+        if (!running) {
+            return;
+        }
+        if (sound.engineInfo().active) {
+            sound.tuneEngine(state.tuning);
+        } else if (!sound.engineInfo().failed) {
+            setTimeout(pushTuning, 200);
+        }
+    };
+    pushTuning();
+});
+
+$('#stop').addEventListener('click', () => {
+    running = false;
+    sound?.stop();
+});
+
+$('#volume').addEventListener('input', (event) => sound?.setVolume(Number(event.target.value)));
+$('#harvest').addEventListener('input', (event) => sound?.setHarvestLoad(Number(event.target.value)));
+
+document.querySelectorAll('[data-engine]').forEach((button) => button.addEventListener('click', () => {
+    state.model = button.dataset.engine === 'model';
+    pressGroup('engine', button.dataset.engine);
+    sound?.setEngineModel(state.model);
+}));
+document.querySelectorAll('[data-camera]').forEach((button) => button.addEventListener('click', () => {
+    state.camera = button.dataset.camera;
+    pressGroup('camera', state.camera);
+}));
+document.querySelectorAll('[data-source]').forEach((button) => button.addEventListener('click', () => {
+    state.source = button.dataset.source;
+    pressGroup('source', state.source);
+    state.lapStart = performance.now();
+    state.lastFrame = -1;
+}));
+
+const loadLap = async () => {
+    state.lap = null;
+    $('#engine-status').textContent = 'Записвам обиколката…';
+    const response = await fetch(`/lap.json?track=${encodeURIComponent($('#track').value)}`);
+    state.lap = await response.json();
+    state.lapStart = performance.now();
+    state.lastFrame = -1;
+};
+$('#track').addEventListener('change', loadLap);
+loadLap();
+
+$('#rpm').addEventListener('input', (event) => { manualRpm = Number(event.target.value); });
+$('#shift-up').addEventListener('click', () => sound?.shift(1));
+$('#shift-down').addEventListener('click', () => sound?.shift(-1));
+$('#pops').addEventListener('click', () => sound?.overrun(Number($('#rpm').value) / 12200));
+
+// ── Кадър: същото извикване като Game.js ─────────────────────────────────
+const extras = { speed: 0, slip: 0, brake: 0, cameraMode: 'chase', limiter: false, spin: 0, kerb: false, gravel: false, crowd: 0, tunnel: false, wallHit: null };
+let smoothedRpm = 4000;
+
+const frame = () => {
+    requestAnimationFrame(frame);
+    if (!running || !sound) {
+        return;
+    }
+    let rpm;
+    let throttle;
+    extras.cameraMode = state.camera;
+    if (state.source === 'lap' && state.lap) {
+        const frames = state.lap.frames;
+        const index = Math.floor(((performance.now() - state.lapStart) / 1000) * state.lap.rate) % frames.length;
+        const current = frames[index];
+        // Прескочени кадри (бавен таб) не губят смени и пукоти.
+        if (state.lastFrame !== index) {
+            const from = state.lastFrame < 0 || index < state.lastFrame ? index : state.lastFrame + 1;
+            for (let i = from; i <= index; i++) {
+                if (frames[i].shift !== 0) {
+                    sound.shift(frames[i].shift);
+                }
+                if (frames[i].overrun) {
+                    sound.overrun(frames[i].rpm / 12200);
+                }
+            }
+            state.lastFrame = index;
+        }
+        rpm = current.rpm;
+        throttle = current.throttle;
+        extras.speed = current.speed;
+        extras.brake = current.brake ?? 0;
+        extras.limiter = current.limiter;
+    } else {
+        throttle = Number($('#throttle').value);
+        smoothedRpm += (manualRpm - smoothedRpm) * 0.15;
+        rpm = smoothedRpm;
+        extras.speed = 40;
+        extras.brake = 0;
+        extras.limiter = $('#limiter').checked;
+    }
+    sound.update(rpm, throttle, extras);
+    $('#rpm-readout').textContent = Math.round(rpm);
+    $('#throttle-readout').textContent = throttle.toFixed(2);
+    const info = sound.engineInfo();
+    const status = $('#engine-status');
+    status.classList.toggle('bad', info.failed && state.model);
+    status.textContent = info.active
+        ? `Физическият модел свири · аудио нишка ${(info.load * 100).toFixed(1)} %`
+        : info.failed
+            ? 'Моделът не се зареди или беше твърде скъп — свири старият синтез.'
+            : state.model ? 'Зареждам модела…' : 'Свири старият синтез.';
+};
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

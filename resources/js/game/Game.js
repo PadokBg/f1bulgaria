@@ -66,6 +66,7 @@ import {
 import { createRadioVoice } from './radioVoice.js';
 import { hashString, mulberry32 } from './random.js';
 import { createEngineSound } from './sound.js';
+import engineWorkletUrl from './engineWorklet.js?url';
 import { isMobileDevice } from './device.js';
 import { shouldCaptureGameKey } from './keyboard.js';
 import { advanceQualityGovernor, createCadenceState, GOVERNOR, resetCadenceForRun, restartCadenceWindow } from './qualityGovernor.js';
@@ -564,8 +565,9 @@ export class Game {
         this.gLat = 0;
 
         // Звукът: синтезиран двигател (sound.js). Контекстът се създава чак
-        // при start() — бутонът „Карай" е потребителският жест.
-        this.sound = createEngineSound({ lowPower: this.lowPower, quality: this.quality });
+        // при start() — бутонът „Карай" е потребителският жест. Физическият
+        // модел е отделен worklet модул — Vite го дава като URL (`?url`).
+        this.sound = createEngineSound({ lowPower: this.lowPower, quality: this.quality, workletUrl: engineWorkletUrl });
 
         // Vue-то закача този callback, за да маха replay overlay-а, когато
         // реплеят свърши отвътре (R рестарт/reset), не само от своя бутон.
@@ -3378,8 +3380,11 @@ export class Game {
             }
         }
 
-        // Ревът на решетката се вдига с всяка светлина.
-        this.sound.update(4500 + lit * 1900, lit >= 5 ? 0.5 : 0.25, LAUNCH_SOUND_EXTRAS);
+        // Решетката по правилата от 2026 г.: без MGU-H турбото се завърта само
+        // с газове, затова пилотите държат високи, неспокойни обороти през
+        // цялата процедура. Козметично — светлините не пипат симулацията.
+        const wave = 0.6 * Math.sin(launch.elapsed * 5.3) + 0.4 * Math.sin(launch.elapsed * 1.9 + 1);
+        this.sound.update(8800 + lit * 350 + wave * 1100, 0.55 + 0.1 * wave, LAUNCH_SOUND_EXTRAS);
 
         for (const animate of this.decorAnimations) {
             animate(dt);

@@ -1,6 +1,13 @@
 /**
  * Звук на двигателя и света — СИНТЕЗ в Web Audio, не семплиран loop.
  *
+ * Двигателят има два гласа. Основният е физическият модел на V10 в
+ * AudioWorklet (engineWorklet.js: цилиндри, първични тръби, колектори,
+ * всмукване) — зарежда се асинхронно след start(), затова до него, при липса
+ * на AudioWorklet или при телефон, който не смогва (worklet-ът докладва
+ * натоварването си), свири осцилаторният синтез по-долу. Съперниците винаги
+ * са на осцилаторния глас: шест физически модела са твърде скъпи.
+ *
  * Предишният опит (семплиран откъс) звучеше като „забила предавка", защото
  * питчването на дълъг запис не следва оборотите точно. Тук честотата се
  * извежда от реалните обороти на трансмисията всеки кадър: двигател на R
@@ -33,25 +40,90 @@
  * асет — умишлено НЕ е включено (решение на собственика).
  */
 
-import { REDLINE } from './drivetrain.js';
+import { SHIFT_RPM } from './drivetrain.js';
 
 /** Общо ниво — умерено; setVolume го скалира, M заглушава изцяло. */
 const MASTER_VOLUME = 0.45;
 
 /**
- * Ера на двигателя. 'v10' (по подразбиране): 5 паления на оборот и
- * оборотите за ухото ×1.25 — V10 от 2005 г. въртеше до ~19 000, а стрелката
- * на HUD-а остава в мащаба на ФИА (15 000). 'hybrid': V6 (3 паления) + турбо
- * / MGU-H свирене и MGU-K harvest при спиране. Само константа — A/B на ухо.
+ * Ера на двигателя. 'hybrid' (по подразбиране): V6 турбо хибрид по правилата
+ * от 2026 г. — 3 паления на оборот, стрелката и ухото в един мащаб
+ * (drivetrain.js SHIFT_RPM ≈ реалните смени). 'v10': 5 паления на оборот и
+ * оборотите за ухото ×1.55 — смяната на ~11 900 по стрелката звучи като
+ * ~18 500 на V10 от 2005 г. Само константа — A/B на ухо.
  */
-const ENGINE_ERA = 'v10';
+const ENGINE_ERA = 'hybrid';
 
 const ENGINE_ERAS = {
-    v10: { firingsPerRev: 5, rpmScale: 1.25, turbo: false },
-    hybrid: { firingsPerRev: 3, rpmScale: 1, turbo: true },
+    v10: { firingsPerRev: 5, rpmScale: 1.55, turbo: false, model: 'v10' },
+    hybrid: { firingsPerRev: 3, rpmScale: 1, turbo: true, model: 'v6-hybrid' },
 };
 
 const ERA = ENGINE_ERAS[ENGINE_ERA];
+
+/**
+ * 2026: при спиране и в бавните завои ДВС не пада на празен ход — остава на
+ * товар и върти MGU-K като генератор (зарежда батерията). Затова в бавните
+ * части болидът звучи високо и „на газ", макар да не ускорява. Първите
+ * HARVEST_DELAY секунди след отпускането са чист overrun (пукането), после
+ * товарът се връща. Оценка по описанията на производителите — нивото се
+ * сверява на ухо (setHarvestLoad в лабораторията).
+ */
+const HARVEST_LOAD = 0.6;
+const HARVEST_DELAY = 0.25;
+const HARVEST_RAMP = 0.35;
+
+/**
+ * Какво иска двигателят в този кадър: товар за ДВС и момент на MGU-K
+ * (+ дава, − зарежда). Чиста функция — ползва я и scripts/game/engine-render.mjs,
+ * за да рендерира WAV със същата логика като играта.
+ *
+ * @param {{ liftSeconds: number }} state   мутира се: време от отпускането
+ * @param {number} throttle 0..1
+ * @param {number} brake 0..1
+ * @param {number} speed m/s
+ * @param {number} dt s
+ * @param {{ load: number, mguk: number }} out
+ * @param {number} [harvestLoad]
+ * @returns {{ load: number, mguk: number }}
+ */
+export function hybridEngineDemand(state, throttle, brake, speed, dt, out, harvestLoad = HARVEST_LOAD) {
+    if (throttle < 0.15 && speed > 12) {
+        state.liftSeconds += dt;
+    } else {
+        state.liftSeconds = 0;
+    }
+    const harvest = clamp01((state.liftSeconds - HARVEST_DELAY) / HARVEST_RAMP);
+    out.load = Math.max(clamp01(throttle), harvestLoad * harvest);
+    out.mguk = speed < 3 ? 0 : throttle > 0.3 ? clamp01(throttle) : -Math.max(clamp01(brake), 0.6 * harvest);
+
+    return out;
+}
+
+/**
+ * Ниво на физическия модел спрямо осцилаторния глас (изравнено на ухо в
+ * лабораторията), тембър по камера и кога worklet-ът се смята за твърде
+ * скъп: дял от реалното време на аудио нишката в два поредни отчета (по 1 s)
+ * → обратно към осцилаторите до края на сесията.
+ */
+const MODEL_ENABLED_FOR_ERA = true;
+const MODEL_LEVEL = 2.5;
+const MODEL_TONE_CHASE = 6500;
+const MODEL_TONE_ONBOARD = 9500;
+const MODEL_MAX_LOAD = 0.5;
+const MODEL_CUT_SECONDS = 0.035;
+const MODEL_BLIP_SECONDS = 0.09;
+
+/**
+ * Миксът на модела по камера: отвън доминира ауспухът, в кокпита —
+ * всмукването (въздушната кутия е над главата на пилота) и механиката (при
+ * хибрида там са и турбото, и воят на MGU-K — затова mech е по-силен).
+ */
+const MODEL_MIX = {
+    chase: { exhaust: 1, intake: 0.25, mech: 0.25, width: 0.4 },
+    onboard: { exhaust: 0.65, intake: 0.9, mech: 0.75, width: 0.2 },
+    broadcast: { exhaust: 1, intake: 0.1, mech: 0.15, width: 0.3 },
+};
 
 /** Хармоници в PeriodicWave (над Найкуист браузърът ги реже сам). */
 const HARMONICS = 48;
@@ -254,14 +326,29 @@ function holdParam(param, t) {
  */
 
 /**
- * @param {{ lowPower?: boolean, quality?: object }} [options] Като при
- *   останалите модули: lowPower (телефон) сваля единствения скъп за CPU възел —
- *   тунелният конволвер става 0.35 s моно вместо 0.7 s стерео — и маха Haas
- *   закъсненията (полировка за слушалки на десктоп). quality не се чете —
- *   аудиото няма GPU цена.
+ * @param {{ lowPower?: boolean, quality?: object, workletUrl?: string, engineModel?: boolean }} [options]
+ *   Като при останалите модули: lowPower (телефон) сваля единствения скъп за
+ *   CPU възел — тунелният конволвер става 0.35 s моно вместо 0.7 s стерео — и
+ *   маха Haas закъсненията (полировка за слушалки на десктоп). quality не се
+ *   чете — аудиото няма GPU цена. workletUrl: адресът на engineWorklet.js
+ *   (Vite `?url` в играта, суров път в лабораторията); без него звучи само
+ *   осцилаторният глас. engineModel: false изключва модела (A/B сравнение).
  */
 export function createEngineSound(options = {}) {
     const lowPower = options.lowPower === true;
+    const workletUrl = typeof options.workletUrl === 'string' ? options.workletUrl : null;
+    let modelWanted = options.engineModel !== false && MODEL_ENABLED_FOR_ERA;
+    // Физическият модел: null до зареждането; modelFailed спира нови опити.
+    let model = null;
+    let modelFailed = false;
+    let modelLoadRatio = 0;
+    let modelLoadStrikes = 0;
+    let broadcastRpm = 0;
+    let broadcastLoad = 0.8;
+    // Хибридът: време от отпускането и какво иска двигателят (без алокации в кадъра).
+    const harvestState = { liftSeconds: 0 };
+    const demand = { load: 0, mguk: 0 };
+    let harvestLoad = HARVEST_LOAD;
     let ctx = null;
     let nodes = null;
     let muted = readMuted();
@@ -507,6 +594,26 @@ export function createEngineSound(options = {}) {
         engineOut.connect(standDelay);
         standDelay.connect(standGain);
         standGain.connect(driverMix);
+
+        // ── Физическият модел: влиза в същата верига (duck/AM/Haas/тунел) ──
+        // Тонът е въздухът между двигателя и ухото (отвън яде високото). Второ
+        // рамо — ТВ картината: същият модел от крайпътния пост, с lowpass и
+        // панорама по разстоянието (updateBroadcast).
+        const modelTone = biquad('lowpass', MODEL_TONE_CHASE, 0.6);
+        const modelLevel = gain(0);
+        modelTone.connect(modelLevel);
+        modelLevel.connect(engineDuck);
+        const broadcastFilter = biquad('lowpass', 2000, 0.8);
+        const broadcastGain = gain(0);
+        const broadcastPan = hasPanner ? ctx.createStereoPanner() : null;
+        modelTone.connect(broadcastFilter);
+        broadcastFilter.connect(broadcastGain);
+        if (broadcastPan) {
+            broadcastGain.connect(broadcastPan);
+            broadcastPan.connect(mix);
+        } else {
+            broadcastGain.connect(mix);
+        }
 
         // ── Шумове (един буфер, различни офсети и филтри) ────────────────
         const noiseBuffer = ctx.createBuffer(1, ctx.sampleRate * NOISE_SECONDS, ctx.sampleRate);
@@ -814,7 +921,107 @@ export function createEngineSound(options = {}) {
             rivalGain,
             rivalPan,
             noiseBuffer,
+            modelTone,
+            modelLevel,
+            broadcastFilter,
+            broadcastGain,
+            broadcastPan,
         };
+
+        loadModel(ctx);
+    };
+
+    // ── Физически модел: асинхронно зареждане, отчети за натоварването ──────
+    const dropModel = () => {
+        modelFailed = true;
+        if (model) {
+            try {
+                model.node.port.postMessage({ type: 'stop' });
+                model.node.disconnect();
+            } catch {
+                // Контекстът вече е затворен.
+            }
+        }
+        model = null;
+    };
+
+    const onModelMessage = (data) => {
+        if (data?.type !== 'load' || !Number.isFinite(data.ratio)) {
+            return;
+        }
+        modelLoadRatio = data.ratio;
+        // Два поредни тежки отчета: телефонът не смогва и звукът ще пука —
+        // осцилаторите са по-добри от накъсан модел.
+        modelLoadStrikes = data.ratio > MODEL_MAX_LOAD ? modelLoadStrikes + 1 : 0;
+        if (modelLoadStrikes >= 2) {
+            dropModel();
+        }
+    };
+
+    const loadModel = (context) => {
+        if (
+            workletUrl === null ||
+            modelFailed ||
+            !MODEL_ENABLED_FOR_ERA ||
+            !context.audioWorklet ||
+            typeof AudioWorkletNode !== 'function'
+        ) {
+            return;
+        }
+        let loading;
+        try {
+            loading = context.audioWorklet.addModule(workletUrl);
+        } catch {
+            // Синхронен отказ (невалиден адрес) не бива да спре целия звук.
+            modelFailed = true;
+
+            return;
+        }
+        loading
+            .then(() => {
+                if (ctx !== context || !nodes || model) {
+                    return;
+                }
+                const node = new AudioWorkletNode(context, 'padok-engine', {
+                    numberOfInputs: 0,
+                    numberOfOutputs: 1,
+                    outputChannelCount: [2],
+                    processorOptions: { engine: ERA.model },
+                });
+                node.connect(nodes.modelTone);
+                node.port.onmessage = (event) => onModelMessage(event.data);
+                node.onprocessorerror = dropModel;
+                const param = (name) => node.parameters.get(name);
+                model = {
+                    node,
+                    rpm: param('rpm'),
+                    load: param('load'),
+                    exhaust: param('exhaust'),
+                    intake: param('intake'),
+                    mech: param('mech'),
+                    limiter: param('limiter'),
+                    mguk: param('mguk'),
+                    width: param('width'),
+                };
+            })
+            .catch(() => {
+                // Без модул (мрежа, CSP, стар браузър) — остава осцилаторният глас.
+                modelFailed = true;
+            });
+    };
+
+    const modelLive = () => modelWanted && model !== null;
+
+    /**
+     * @param {'chase'|'onboard'|'broadcast'} kind
+     * @param {number} t
+     */
+    const setModelMix = (kind, t) => {
+        const mixSetting = MODEL_MIX[kind];
+        setP(model.exhaust, mixSetting.exhaust, 0.15, t);
+        setP(model.intake, mixSetting.intake, 0.15, t);
+        setP(model.mech, mixSetting.mech, 0.15, t);
+        setP(model.width, mixSetting.width, 0.15, t);
     };
 
     const ready = () => ctx !== null && nodes !== null && ctx.state === 'running';
@@ -937,6 +1144,53 @@ export function createEngineSound(options = {}) {
         } else if (shift < 0) {
             duckBlip(nodes.rivalDuck.gain, t);
         }
+    };
+
+    /**
+     * Осцилаторният глас на двигателя (резерв и A/B): PeriodicWave двойка,
+     * буцест празен ход, лимитер/burble AM, всмукване. Вика се от update(),
+     * когато физическият модел не свири.
+     */
+    const updateOscillatorEngine = (n, t, firing, revRatio, throttle, rpm, onboard, limiterOn) => {
+        // Плавни преходи (20–40 ms) — без стъпаловидно „циклене".
+        setP(n.oscA.frequency, firing / 2, 0.02, t);
+        setP(n.oscB.frequency, firing / 2, 0.02, t);
+        const detuneDip = limiterOn ? -18 : 0;
+        setP(n.oscA.detune, -6 + detuneDip, 0.01, t);
+        setP(n.oscB.detune, 6 + detuneDip, 0.01, t);
+        setP(n.lumpLfo.frequency, Math.max(5, firing / 10), 0.05, t);
+        setP(n.lumpDepth.gain, (1 - revRatio) ** 2 * 0.1, 0.05, t);
+
+        // Филтърът се отваря с газта и оборотите — „ръмжене" на пълна газ,
+        // приглушено пърпорене на подаване. Onboard: +600 Hz (в каската
+        // си); chase: таван 5.5 kHz (въздухът яде високото).
+        const baseCutoff = 500 + revRatio * 3800 + throttle * 1600;
+        const cutoff = onboard ? Math.min(7000, baseCutoff + 600) : Math.min(5500, baseCutoff);
+        setP(n.engineFilter.frequency, cutoff, 0.04, t);
+        setP(n.engineGain.gain, 0.14 + throttle * 0.36 + revRatio * 0.12, 0.05, t);
+
+        // Лимитер (ръчна, опрян таван с газ): 27 Hz срез, разстройка надолу и
+        // пукот на всеки ~110 ms по часовника на контекста.
+        setP(n.limiterDepth.gain, limiterOn ? 0.19 : 0, 0.01, t);
+        if (limiterOn) {
+            if (nextCrackAt < t) {
+                nextCrackAt = t;
+            }
+            let scheduled = 0;
+            while (nextCrackAt < t + 0.03 && scheduled < 3) {
+                noiseBurst(1200, 'bandpass', 0.025, 0.22, nextCrackAt - t, 2);
+                nextCrackAt += LIMITER_CRACK_EVERY;
+                scheduled++;
+            }
+        } else {
+            nextCrackAt = 0;
+        }
+
+        // Burble: затворена газ на високи обороти = тихо къркорене.
+        setP(n.burbleDepth.gain, throttle < 0.05 && rpm > 8000 ? 0.06 : 0, 0.05, t);
+
+        setP(n.intakeFilter.frequency, 900 + revRatio * 2400, 0.05, t);
+        setP(n.intakeGain.gain, (0.02 + throttle * 0.09) * (onboard ? 1.5 : 1), 0.05, t);
     };
 
     /**
@@ -1072,6 +1326,7 @@ export function createEngineSound(options = {}) {
             } else {
                 // Каналът не бива да остане на нивото на последния fly-by.
                 setP(nodes.rivalGain.gain, 0, 0.05, t);
+                setP(nodes.broadcastGain.gain, 0, 0.05, t);
                 if (stoppedBeforeBroadcast) {
                     stoppedBeforeBroadcast = false;
                     stopSound();
@@ -1126,49 +1381,37 @@ export function createEngineSound(options = {}) {
             }
             spin = clamp01(spin);
             const audioRpm = rpm + spin * 2000;
-            const revRatio = clamp01(audioRpm / REDLINE);
+            const revRatio = clamp01(audioRpm / SHIFT_RPM);
             const firing = Math.max(40, ((audioRpm * ERA.rpmScale) / 60) * ERA.firingsPerRev);
 
-            // ── Двигател ──
-            // Плавни преходи (20–40 ms) — без стъпаловидно „циклене".
-            setP(n.oscA.frequency, firing / 2, 0.02, t);
-            setP(n.oscB.frequency, firing / 2, 0.02, t);
-            const detuneDip = limiterOn ? -18 : 0;
-            setP(n.oscA.detune, -6 + detuneDip, 0.01, t);
-            setP(n.oscB.detune, 6 + detuneDip, 0.01, t);
-            setP(n.lumpLfo.frequency, Math.max(5, firing / 10), 0.05, t);
-            setP(n.lumpDepth.gain, (1 - revRatio) ** 2 * 0.1, 0.05, t);
-
-            // Филтърът се отваря с газта и оборотите — „ръмжене" на пълна газ,
-            // приглушено пърпорене на подаване. Onboard: +600 Hz (в каската
-            // си); chase: таван 5.5 kHz (въздухът яде високото).
-            const baseCutoff = 500 + revRatio * 3800 + throttle * 1600;
-            const cutoff = onboard ? Math.min(7000, baseCutoff + 600) : Math.min(5500, baseCutoff);
-            setP(n.engineFilter.frequency, cutoff, 0.04, t);
-            setP(n.engineGain.gain, 0.14 + throttle * 0.36 + revRatio * 0.12, 0.05, t);
-
-            // Лимитер (ръчна на REDLINE с газ): 27 Hz срез, разстройка надолу и
-            // пукот на всеки ~110 ms по часовника на контекста.
-            setP(n.limiterDepth.gain, limiterOn ? 0.19 : 0, 0.01, t);
-            if (limiterOn) {
-                if (nextCrackAt < t) {
-                    nextCrackAt = t;
+            // ── Двигател: физическият модел, ако е зареден ──
+            // Същите обороти и газ; срязването в лимитера, пукотите и blip-овете
+            // са вътре в модела, затова осцилаторните AM слоеве мълчат.
+            if (modelLive()) {
+                setP(model.rpm, audioRpm * ERA.rpmScale, 0.02, t);
+                // Хибридът зарежда при спиране: ДВС на товар, MGU-K като генератор.
+                if (ERA.turbo) {
+                    hybridEngineDemand(harvestState, throttle, brake, speed, audioDt, demand, harvestLoad);
+                } else {
+                    demand.load = clamp01(throttle);
+                    demand.mguk = 0;
                 }
-                let scheduled = 0;
-                while (nextCrackAt < t + 0.03 && scheduled < 3) {
-                    noiseBurst(1200, 'bandpass', 0.025, 0.22, nextCrackAt - t, 2);
-                    nextCrackAt += LIMITER_CRACK_EVERY;
-                    scheduled++;
-                }
-            } else {
+                setP(model.load, demand.load, 0.02, t);
+                setP(model.mguk, demand.mguk, 0.05, t);
+                setP(model.limiter, limiterOn ? 1 : 0, 0.005, t);
+                setModelMix(onboard ? 'onboard' : 'chase', t);
+                setP(n.modelTone.frequency, onboard ? MODEL_TONE_ONBOARD : MODEL_TONE_CHASE, 0.15, t);
+                setP(n.modelLevel.gain, MODEL_LEVEL, 0.08, t);
+                setP(n.engineGain.gain, 0, 0.08, t);
+                setP(n.lumpDepth.gain, 0, 0.05, t);
+                setP(n.limiterDepth.gain, 0, 0.01, t);
+                setP(n.burbleDepth.gain, 0, 0.05, t);
+                setP(n.intakeGain.gain, 0, 0.05, t);
                 nextCrackAt = 0;
+            } else {
+                setP(n.modelLevel.gain, 0, 0.08, t);
+                updateOscillatorEngine(n, t, firing, revRatio, throttle, rpm, onboard, limiterOn);
             }
-
-            // Burble: затворена газ на високи обороти = тихо къркорене.
-            setP(n.burbleDepth.gain, throttle < 0.05 && rpm > 8000 ? 0.06 : 0, 0.05, t);
-
-            setP(n.intakeFilter.frequency, 900 + revRatio * 2400, 0.05, t);
-            setP(n.intakeGain.gain, (0.02 + throttle * 0.09) * (onboard ? 1.5 : 1), 0.05, t);
 
             // ── Повърхности ──
             // Базата и дълбочината са равни → гейнът се люлее 0..0.32
@@ -1258,7 +1501,13 @@ export function createEngineSound(options = {}) {
             }
 
             // ── Хибрид: турбо инерция, wastegate при отпускане, harvest при спиране ──
-            if (n.turbo) {
+            // Моделът има собствени турбо, wastegate и MGU-K — осцилаторните
+            // слоеве свирят само с осцилаторния двигател.
+            if (n.turbo && modelLive()) {
+                n.turbo.boost.offset?.setTargetAtTime(0, t, 0.1);
+                setP(n.turbo.harvestGain.gain, 0, 0.05, t);
+                boostEstimate = 0;
+            } else if (n.turbo) {
                 const boostTarget = throttle * revRatio;
                 const tau = throttle > 0 ? 0.35 : 0.6;
                 n.turbo.boost.offset?.setTargetAtTime(boostTarget, t, tau);
@@ -1286,6 +1535,20 @@ export function createEngineSound(options = {}) {
                 return;
             }
             const t = ctx.currentTime;
+            if (modelLive()) {
+                // Моделът срязва запалването сам: тръбите доехтяват, а
+                // несгорялото гориво пука при повторното палене. Отвън остава
+                // само металното щракане на зъбите на кутията.
+                if (direction > 0) {
+                    model.node.port.postMessage({ type: 'cut', at: t, duration: MODEL_CUT_SECONDS });
+                    noiseBurst(2600, 'bandpass', 0.04, 0.12, 0, 2);
+                } else {
+                    model.node.port.postMessage({ type: 'blip', at: t, duration: MODEL_BLIP_SECONDS });
+                    noiseBurst(2200, 'bandpass', 0.04, 0.08, 0, 2);
+                }
+
+                return;
+            }
             if (direction > 0) {
                 duckCut(nodes.engineDuck.gain, t, 0.02);
                 noiseBurst(1900, 'bandpass', 0.07, 0.5);
@@ -1314,8 +1577,19 @@ export function createEngineSound(options = {}) {
             let at = 0.02 + Math.random() * 0.05;
             for (let i = 0; i < count && at < 0.5; i++) {
                 offsets.push(at);
-                noiseBurst(420 + Math.random() * 280, 'lowpass', 0.03 + Math.random() * 0.03, 0.25 + Math.random() * 0.15, at, 0.9);
                 at += 0.06 + Math.random() * 0.08;
+            }
+
+            // Моделът пали горивото в колектора — пукотът излиза през
+            // тръбите с техния тембър; пламъкът на Game мига в същите моменти.
+            if (modelLive()) {
+                model.node.port.postMessage({ type: 'pops', times: offsets.map((offset) => t + offset), strength: 1 });
+
+                return offsets;
+            }
+
+            for (const offset of offsets) {
+                noiseBurst(420 + Math.random() * 280, 'lowpass', 0.03 + Math.random() * 0.03, 0.25 + Math.random() * 0.15, offset, 0.9);
             }
 
             nodes.overrunLfo.frequency.setValueAtTime(8 + Math.random() * 8, t);
@@ -1521,7 +1795,83 @@ export function createEngineSound(options = {}) {
             if (!ready() || !broadcast) {
                 return;
             }
-            driveRival(distance, speed, pan, closing, rpm, shift, BROADCAST_RANGE, 2, 0.5, 6000);
+            if (!modelLive()) {
+                driveRival(distance, speed, pan, closing, rpm, shift, BROADCAST_RANGE, 2, 0.5, 6000);
+
+                return;
+            }
+
+            // Истинският двигател и в ТВ картината: Доплерът мести оборотите
+            // (височината на модела следва тях), разстоянието — lowpass и сила.
+            const t = ctx.currentTime;
+            const audible = Number.isFinite(distance) && distance < BROADCAST_RANGE;
+            const proximity = audible ? Math.max(0, 1 - distance / BROADCAST_RANGE) ** 2 : 0;
+            const effectiveRpm = rpm ?? 5000 + Math.min(1, speed / 92) * 9500;
+            const doppler = 1 + clamp((2 * closing) / 340, -0.3, 0.3);
+            // Реплеят не носи газта: растящи обороти = пълна газ, падащи без
+            // смяна = спиране (хибридът зарежда на товар, V10 е отпуснат).
+            const rising = effectiveRpm - broadcastRpm;
+            const brakingLoad = ERA.turbo ? harvestLoad : 0;
+            const loadGoal = shift !== 0 ? broadcastLoad : rising > 15 ? 1 : rising < -40 ? brakingLoad : broadcastLoad;
+            broadcastLoad += (loadGoal - broadcastLoad) * 0.3;
+            broadcastRpm = effectiveRpm;
+
+            setP(model.rpm, effectiveRpm * ERA.rpmScale * doppler, 0.03, t);
+            setP(model.load, broadcastLoad, 0.03, t);
+            setP(model.mguk, ERA.turbo ? (loadGoal >= 1 ? 0.8 : loadGoal === brakingLoad ? -0.6 : 0) : 0, 0.08, t);
+            setP(model.limiter, 0, 0.005, t);
+            setModelMix('broadcast', t);
+            setP(nodes.modelTone.frequency, MODEL_TONE_CHASE, 0.1, t);
+            setP(nodes.broadcastFilter.frequency, 900 + 6000 * proximity, 0.06, t);
+            setP(nodes.broadcastGain.gain, proximity * MODEL_LEVEL * 0.5, 0.06, t);
+            if (nodes.broadcastPan) {
+                setP(nodes.broadcastPan.pan, clamp(pan, -1, 1), 0.06, t);
+            }
+            setP(nodes.rivalGain.gain, 0, 0.05, t);
+            if (shift > 0) {
+                model.node.port.postMessage({ type: 'cut', at: t, duration: MODEL_CUT_SECONDS });
+            } else if (shift < 0) {
+                model.node.port.postMessage({ type: 'blip', at: t, duration: MODEL_BLIP_SECONDS });
+            }
+        },
+
+        /**
+         * Физическият модел срещу осцилаторния глас (A/B в лабораторията).
+         * Изключеният модел остава зареден — връщането е мигновено.
+         *
+         * @param {boolean} enabled
+         */
+        setEngineModel(enabled) {
+            modelWanted = Boolean(enabled) && MODEL_ENABLED_FOR_ERA;
+        },
+
+        /**
+         * Състоянието на модела: свири ли и колко от аудио нишката ползва.
+         *
+         * @returns {{ active: boolean, failed: boolean, load: number }}
+         */
+        engineInfo() {
+            return { active: modelLive(), failed: modelFailed, load: modelLoadRatio };
+        },
+
+        /**
+         * Настройка на модела на живо (лабораторията) — ключовете на пресета
+         * (engineWorklet.js V6_HYBRID_PRESET / V10_PRESET).
+         *
+         * @param {object} values
+         */
+        tuneEngine(values) {
+            model?.node.port.postMessage({ type: 'tune', values });
+        },
+
+        /**
+         * Товарът на ДВС при зареждане в спирачна зона (0 = отпуснат като до
+         * 2025 г.). За сверяване на ухо в лабораторията.
+         *
+         * @param {number} value
+         */
+        setHarvestLoad(value) {
+            harvestLoad = clamp01(Number.isFinite(value) ? value : HARVEST_LOAD);
         },
 
         dispose() {
@@ -1529,6 +1879,11 @@ export function createEngineSound(options = {}) {
                 clearTimeout(suspendTimer);
                 suspendTimer = null;
             }
+            if (model) {
+                model.node.port.onmessage = null;
+                model.node.port.postMessage({ type: 'stop' });
+            }
+            model = null;
             if (ctx) {
                 ctx.onstatechange = null;
                 ctx.close?.()?.catch?.(() => {});
