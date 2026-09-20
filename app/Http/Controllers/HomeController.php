@@ -4,10 +4,6 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
-use App\Enums\F2SessionType;
-use App\Models\F2Driver;
-use App\Models\F2RaceSession;
-use App\Models\F2Season;
 use App\Models\RaceDataRecap;
 use App\Models\RaceSession;
 use App\Models\Season;
@@ -23,6 +19,7 @@ use App\Services\LiveTiming\OpenF1TokenManager;
 use App\Services\Predictions\LeaderboardService;
 use App\Services\Predictions\PredictionLockService;
 use App\Services\Races\RaceNameLocalizer;
+use App\Services\Tsolov\TsolovMeter;
 use App\Support\DriverName;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
@@ -32,9 +29,6 @@ use Inertia\Response;
 
 class HomeController extends Controller
 {
-    /** Slug на Цолов в `f2_drivers` — същият, който ползва TsolovController. */
-    private const TSOLOV_SLUG = 'nikola-tsolov';
-
     public function index(
         NextRaceResolver $resolver,
         ThisDayInF1Service $thisDay,
@@ -42,6 +36,7 @@ class HomeController extends Controller
         OpenF1TokenManager $tokens,
         PredictionLockService $locks,
         LeaderboardService $leaderboard,
+        TsolovMeter $tsolov,
     ): Response {
         $hero = $resolver->resolve();
 
@@ -53,7 +48,7 @@ class HomeController extends Controller
             'topNews' => $this->topNews(),
             'predictionCta' => $this->predictionCta($hero, $locks),
             'gameTeaser' => $this->gameTeaser(),
-            'tsolov' => $this->tsolovMeter(),
+            'tsolov' => $tsolov->summary(),
             // Не е optional/defer нарочно: и двете биха го скрили при първо
             // зареждане, а смисълът му е да се види веднага. Гостът не плаща —
             // me() излиза с null преди която и да е заявка.
@@ -93,108 +88,6 @@ class HomeController extends Controller
             'slug' => $week['slug'],
             'name' => (string) $name,
             'top' => $top->values()->all(),
-        ];
-    }
-
-    /**
-     * „Цоловметър" — къде е Никола Цолов в шампионата на Ф2 и кога кара пак.
-     *
-     * Стои на началната, защото е единственото на сайта, което е само наше:
-     * българин, който се бори за титлата във Ф2, е причината половината хора
-     * изобщо да отворят сайт за Формула 1 на български. Страницата /tsolov
-     * съществува отдавна, но към нея се стигаше само през менюто.
-     *
-     * Кешът е 10 минути както при рекапа — началната е най-натоварената
-     * страница, а класирането се мени по веднъж на кръг.
-     *
-     * @return array<string, mixed>|null
-     */
-    private function tsolovMeter(): ?array
-    {
-        if (! config('features.tsolov')) {
-            return null;
-        }
-
-        return Cache::remember('home:tsolov', now()->addMinutes(10), function (): ?array {
-            $season = F2Season::query()->where('is_current', true)->first();
-
-            if ($season === null) {
-                return null;
-            }
-
-            $tsolov = F2Driver::query()
-                ->where('f2_season_id', $season->id)
-                ->where('slug', self::TSOLOV_SLUG)
-                ->first();
-
-            if ($tsolov === null || $tsolov->position === null) {
-                return null;
-            }
-
-            $leads = $tsolov->position === 1;
-
-            // Съперникът: вторият, ако Цолов води; иначе този точно пред него.
-            // orderByDesc('points') е защита срещу два реда на една позиция —
-            // синхронизацията вече е създавала дубликат на един пилот.
-            $rival = F2Driver::query()
-                ->where('f2_season_id', $season->id)
-                ->where('position', $leads ? 2 : $tsolov->position - 1)
-                ->orderByDesc('points')
-                ->first();
-
-            return [
-                'position' => $tsolov->position,
-                'points' => (float) $tsolov->points,
-                'leads' => $leads,
-                'rival' => $rival === null ? null : [
-                    'name' => DriverName::display($rival->slug, $rival->fullName()),
-                    'gap' => round(abs((float) $tsolov->points - (float) $rival->points), 1),
-                ],
-                'rounds_left' => $this->f2RoundsLeft($season),
-                'next' => $this->nextTsolovSession($season),
-            ];
-        });
-    }
-
-    /** Колко кръга остават до края на сезона във Ф2. */
-    private function f2RoundsLeft(F2Season $season): int
-    {
-        return $season->races()
-            ->whereHas('sessions', fn ($query) => $query
-                ->where('session_type', F2SessionType::FeatureRace)
-                ->where('scheduled_at_utc', '>', now()))
-            ->count();
-    }
-
-    /**
-     * Следващата сесия с точки (спринт или главно) — часът за брояча.
-     *
-     * Тренировките и квалификациите нарочно се пропускат: бройката до тях не
-     * казва нищо на човек, който иска да знае кога Цолов се бори за точки.
-     *
-     * @return array<string, mixed>|null
-     */
-    private function nextTsolovSession(F2Season $season): ?array
-    {
-        $session = F2RaceSession::query()
-            ->whereIn('session_type', [F2SessionType::SprintRace, F2SessionType::FeatureRace])
-            ->whereHas('race', fn ($query) => $query->where('f2_season_id', $season->id))
-            ->where('scheduled_at_utc', '>', now())
-            ->orderBy('scheduled_at_utc')
-            ->with('race:id,location_name,country_name,round')
-            ->first();
-
-        if ($session === null) {
-            return null;
-        }
-
-        return [
-            'label' => $session->session_type->label(),
-            'location' => $session->race?->location_name,
-            'round' => $session->race?->round,
-            // TBC час се показва само като ден — иначе броячът лъже до минутата.
-            'at' => $session->scheduled_at_utc?->toIso8601String(),
-            'time_tbc' => (bool) $session->time_tbc,
         ];
     }
 
