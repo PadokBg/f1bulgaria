@@ -41,6 +41,12 @@ class SyncF2Command extends Command
             [[$stats['rounds'], $stats['sessions'], $stats['results']]],
         );
 
+        // Безименен ред от API-то се пропуска, вместо да създаде пилот с празен
+        // slug. Ако се появи, искаме да го видим — не бива да е тихо.
+        if (($stats['skipped_drivers'] ?? 0) > 0) {
+            $this->warn("Пропуснати редове без име и без driverReference: {$stats['skipped_drivers']}");
+        }
+
         foreach ($stats['errors'] as $error) {
             $this->warn($error);
         }

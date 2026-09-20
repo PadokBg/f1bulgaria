@@ -408,7 +408,9 @@ class F2ApiSync
         if ($driver === null) {
             return F2Driver::query()->create([
                 'f2_season_id' => $season->id,
-                'slug' => $slug,
+                // Зает slug от ДРУГ пилот (съименници) — иначе уникалният
+                // индекс хвърля и отнася целия кръг със себе си.
+                'slug' => $this->freeSlug($season, $slug, $reference),
                 'country_code' => $country,
                 ...$attributes,
             ]);
@@ -475,6 +477,38 @@ class F2ApiSync
             ->where('slug', $slug)
             ->whereKeyNot($exceptId)
             ->exists();
+    }
+
+    /**
+     * Свободен slug за нов пилот в сезона.
+     *
+     * Двама души с едно име в един сезон са рядкост, но уникалният индекс
+     * (f2_season_id, slug) не прощава: при сблъсък create() хвърля и заради
+     * едно поле пада целият кръг. Разграничителят е reference-ът — стабилен и
+     * четим, за разлика от пореден номер.
+     */
+    private function freeSlug(F2Season $season, string $slug, string $reference): string
+    {
+        $taken = fn (string $candidate): bool => F2Driver::query()
+            ->where('f2_season_id', $season->id)
+            ->where('slug', $candidate)
+            ->exists();
+
+        if (! $taken($slug)) {
+            return $slug;
+        }
+
+        if ($reference !== '' && ! $taken($withReference = $slug.'-'.Str::slug($reference))) {
+            return $withReference;
+        }
+
+        for ($i = 2; $i <= 20; $i++) {
+            if (! $taken($numbered = "{$slug}-{$i}")) {
+                return $numbered;
+            }
+        }
+
+        return $slug.'-'.Str::random(6);
     }
 
     /**
