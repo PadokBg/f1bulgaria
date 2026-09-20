@@ -22,6 +22,9 @@ class NewsletterSend extends Model
 
     public const TYPE_LIVE_COVERAGE = 'live_coverage';
 
+    /** Резултатът след кръга — до подалите прогноза за него. */
+    public const TYPE_RACE_RESULT = 'race_result';
+
     /**
      * Оперативни аларми за news pipeline-а (news:health-check). Не са
      * бюлетин и не стигат до абонати — журналът се ползва само за да се

@@ -215,6 +215,44 @@ class LeaderboardService
     }
 
     /**
+     * Какво БИ постигнало това време, без да се записва нищо — за госта, който
+     * току-що е спрял на финала и още не е влязъл.
+     *
+     * Позицията се брои спрямо най-добрите обиколки на другите, точно както
+     * rankOf(), но без потребител: гостът още няма свой ред, който да се
+     * изключва.
+     *
+     * @return array{rank: int, ranked_users: int, leader_ms: int|null, gap_ms: int|null, purple_lap: bool}
+     */
+    public function preview(string $trackSlug, int $lapMs): array
+    {
+        $leaderMs = $this->bests($trackSlug)['lap_ms'];
+
+        $ahead = GameLapRecord::query()
+            ->counted()
+            ->where('track_slug', $trackSlug)
+            ->groupBy('user_id')
+            ->havingRaw('MIN(lap_ms) < ?', [$lapMs])
+            ->get(['user_id'])
+            ->count();
+
+        $rankedUsers = GameLapRecord::query()
+            ->counted()
+            ->where('track_slug', $trackSlug)
+            ->distinct()
+            ->count('user_id');
+
+        return [
+            'rank' => $ahead + 1,
+            'ranked_users' => $rankedUsers,
+            'leader_ms' => $leaderMs,
+            // Отрицателно = гостът е по-бърз от лидера (тогава purple_lap е true).
+            'gap_ms' => $leaderMs !== null ? $lapMs - $leaderMs : null,
+            'purple_lap' => $leaderMs === null || $lapMs < $leaderMs,
+        ];
+    }
+
+    /**
      * Записва квалификационна обиколка и връща какво е постигнала: лилави
      * полета (нов рекорд на пистата), личен рекорд, позиция и обновените
      * рекорди/класация.

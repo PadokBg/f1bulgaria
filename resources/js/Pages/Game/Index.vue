@@ -8,6 +8,7 @@ import { isMobileDevice } from '@/game/device.js';
 import { createSessionTracker, sendSessionEvents, sessionDeviceContext } from '@/game/sessionTracker.js';
 import { formatDelta, formatGap, formatLapTime, formatSeconds, splitDurations } from '@/game/format.js';
 import { createTouchControls, liveTouchControls } from '@/game/touchControls.js';
+import { clearPendingRun, readPendingRun, stashPendingRun } from '@/composables/usePendingGameRun.js';
 import { Head, usePage } from '@inertiajs/vue3';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 
@@ -16,6 +17,10 @@ const props = defineProps({
     // Slug на „пистата на уикенда" — там, където Ф1 кара в момента.
     weekTrack: { type: String, default: null },
     gameFeedback: { type: Object, default: () => ({ eligible: false, last_session_id: null, submitted: false }) },
+    // Текущите версии на симулацията и на състезанието. Заделеният бег на
+    // гост се отхвърля, ако междувременно някоя от тях е вдигната.
+    simVersion: { type: Number, default: 0 },
+    raceVersion: { type: Number, default: 0 },
 });
 
 // Опростени контури за каталога, извлечени от същите GPS точки в
@@ -936,6 +941,13 @@ const resultTab = ref('times'); // 'times' | 'analysis'
 const analysis = shallowRef(null); // Game.getLapAnalysis() за последната обиколка
 const displayedLapMs = ref(null); // count-up на времето в резултатния екран
 let countUpId = 0;
+// Гост на финала: каква позиция би било времето му и дали е заделено за след вход.
+const guestPreview = ref(null); // { rank, ranked_users, leader_ms, gap_ms, purple_lap }
+const guestSaveKept = ref(false);
+// Съдбата на заделената обиколка след връщане от вход: 'saving' | 'saved' | 'failed'.
+const restoreState = ref(null);
+const restoredKind = ref(null); // 'lap' | 'race'
+const restoredMeta = ref(null);
 
 const fetchLeaderboard = async (slug, loadRun) => {
     const isCurrent = () => loadRun === gameLoadRun && selectedTrack.value?.slug === slug;
@@ -1006,6 +1018,45 @@ const onFinish = (res) => {
     // без запис — контактите го правят невъзпроизводимо за валидацията).
     if (res.valid && res.trace && authUser.value) {
         submitLap(res);
+    } else if (res.valid && res.trace) {
+        offerGuestSave(res);
+    }
+};
+
+/**
+ * Гост с чиста обиколка: времето се заделя, а екранът казва каква позиция е
+ * това. Преди тук нямаше нищо освен сив ред „Влез" — и обиколката се губеше,
+ * дори човекът да влезеше веднага.
+ */
+const offerGuestSave = async (res) => {
+    guestPreview.value = null;
+    guestSaveKept.value = stashPendingRun({
+        kind: 'lap',
+        track: selectedTrack.value.slug,
+        sim_version: res.simVersion,
+        payload: {
+            track: selectedTrack.value.slug,
+            lap_ms: res.lapMs,
+            sectors: res.sectorsMs,
+            trace: res.trace,
+            sim_version: res.simVersion,
+        },
+    });
+
+    const previewedSlug = selectedTrack.value.slug;
+
+    try {
+        const { data } = await window.axios.post('/game/lap/preview', {
+            track: previewedSlug,
+            lap_ms: res.lapMs,
+        });
+
+        // Пистата може да се е сменила, докато заявката лети.
+        if (selectedTrack.value?.slug === previewedSlug) {
+            guestPreview.value = data;
+        }
+    } catch {
+        // Позицията е бонус — поканата за запазване стои и без нея.
     }
 };
 
@@ -1059,7 +1110,62 @@ const clearResult = () => {
     submitError.value = null;
     analysis.value = null;
     displayedLapMs.value = null;
+    guestPreview.value = null;
+    guestSaveKept.value = false;
 };
+
+/**
+ * Връщане от вход: заделената обиколка отива в класацията сама.
+ *
+ * Минава през същия `/game/lap` със същия трейс, значи и през същото сървърно
+ * преиграване — заделянето не дава на никого доверие, което иначе не би имал.
+ */
+const submitPendingRun = async () => {
+    if (!authUser.value) {
+        return;
+    }
+
+    const pending = readPendingRun({ simVersion: props.simVersion });
+
+    if (pending === null) {
+        return;
+    }
+
+    // Състезанието носи и своя версия — вдигнатият RACE_VERSION нулира
+    // класацията „Състезание" и заделеният бег вече не важи.
+    if (pending.kind === 'race' && pending.payload?.race_version !== props.raceVersion) {
+        clearPendingRun();
+
+        return;
+    }
+
+    restoreState.value = 'saving';
+    restoredKind.value = pending.kind;
+
+    try {
+        const { data } = await window.axios.post(
+            pending.kind === 'race' ? '/game/race' : '/game/lap',
+            pending.payload,
+        );
+
+        restoredMeta.value = data;
+        restoreState.value = 'saved';
+        clearPendingRun();
+
+        // Класацията на екрана още е отпреди вписването.
+        if (pending.kind === 'lap' && selectedTrack.value?.slug === pending.track) {
+            bests.value = data.bests ?? bests.value;
+            userBests.value = data.user_bests ?? userBests.value;
+            leaderboard.value = data.top ?? leaderboard.value;
+        }
+    } catch {
+        restoreState.value = 'failed';
+        // Изхвърляме го: сървърът го е отказал и повторният опит ще даде същото.
+        clearPendingRun();
+    }
+};
+
+onMounted(submitPendingRun);
 
 const newLap = () => {
     replaying.value = false;
@@ -1770,6 +1876,22 @@ const startGame = async (track, rivalUserId = null, raceRivalUserId = null) => {
 
             if (trace !== null && authUser.value) {
                 submitRace(raceOutcome, trace);
+            } else if (trace !== null) {
+                // Гост: състезанието се заделя за след вход, както обиколката.
+                guestSaveKept.value = stashPendingRun({
+                    kind: 'race',
+                    track: selectedTrack.value.slug,
+                    sim_version: raceOutcome.simVersion,
+                    payload: {
+                        track: selectedTrack.value.slug,
+                        race_ms: raceOutcome.raceMs,
+                        penalties: raceOutcome.penalties,
+                        position: raceOutcome.position,
+                        trace,
+                        sim_version: raceOutcome.simVersion,
+                        race_version: raceOutcome.raceVersion,
+                    },
+                });
             }
         };
 
@@ -2507,6 +2629,28 @@ const recenterTilt = () => {
 <template>
     <PublicLayout>
         <Head title="Игра" />
+
+        <!--
+            Връщане от вход със заделен бег: човекът трябва веднага да види, че
+            времето, заради което се е регистрирал, е стигнало до класацията.
+        -->
+        <div v-if="restoreState" class="mx-auto max-w-6xl px-4 pt-6" role="status">
+            <div
+                class="rounded-xl border px-4 py-3 text-sm"
+                :class="restoreState === 'failed'
+                    ? 'border-amber-900/50 bg-amber-950/30 text-amber-300'
+                    : 'border-emerald-900/50 bg-emerald-950/30 text-emerald-300'"
+            >
+                <span v-if="restoreState === 'saving'">Записваме времето ти…</span>
+                <span v-else-if="restoreState === 'saved'">
+                    Готово — {{ restoredKind === 'race' ? 'състезанието ти е' : 'времето ти е' }} в класацията.
+                    <template v-if="restoredMeta?.rank">Позиция №{{ restoredMeta.rank }}.</template>
+                </span>
+                <span v-else>
+                    Времето не се записа. Покарай още една обиколка — вече си вписан и тя ще влезе в класацията.
+                </span>
+            </div>
+        </div>
 
         <!-- ── Избор на писта ─────────────────────────────────────────── -->
         <div v-if="!selectedTrack" class="mx-auto max-w-6xl px-4 py-8 sm:py-10">
@@ -3914,8 +4058,15 @@ const recenterTilt = () => {
                                     </span>
                                 </div>
                                 <div v-else-if="!authUser" class="mt-2 text-xs text-zinc-300">
-                                    <a href="/login" class="font-semibold text-[#e10600] hover:underline">Влез</a>,
-                                    за да запишеш времето си в класацията.
+                                    <a
+                                        href="/game/save-lap"
+                                        class="inline-flex min-h-11 items-center justify-center rounded-xl bg-[#e10600] px-4 py-2 text-sm font-semibold text-white hover:bg-[#c00500]"
+                                    >
+                                        Запази състезанието
+                                    </a>
+                                    <p v-if="guestSaveKept" class="mt-1.5 text-[11px] text-zinc-400">
+                                        Резултатът те чака — влез и той влиза в класацията само.
+                                    </p>
                                 </div>
                                 <div v-else-if="!raceHasTrace" class="mt-2 text-xs text-zinc-500">
                                     Състезанието е твърде дълго за запис — не влиза в класацията.
@@ -4190,12 +4341,41 @@ const recenterTilt = () => {
                                 >
                                     Невалидна обиколка (излизане извън трасето) — не влиза в класацията.
                                 </div>
+                                <!--
+                                    Гост с чисто време: показваме каква позиция е
+                                    това и му даваме бутон, който ЗАПАЗВА бега —
+                                    преди тук имаше само покана за вход, а самата
+                                    обиколка се губеше по пътя към /login.
+                                -->
                                 <div
                                     v-else-if="!authUser"
-                                    class="mt-3 rounded-lg border border-zinc-700 bg-zinc-800/40 px-3 py-2 text-center text-xs text-zinc-300"
+                                    class="mt-3 rounded-xl border border-[#e10600]/40 bg-[#e10600]/10 px-3 py-3 text-center"
                                 >
-                                    <a href="/login" class="font-semibold text-[#e10600] hover:underline">Влез</a>,
-                                    за да запишеш времето си в класацията.
+                                    <p v-if="guestPreview?.purple_lap" class="font-display text-sm font-bold text-fuchsia-300">
+                                        Най-бързото време в Падок!
+                                    </p>
+                                    <p v-else-if="guestPreview" class="font-display text-sm font-bold text-zinc-100">
+                                        Това е
+                                        <span class="text-[#e10600]">{{ guestPreview.rank }}-то</span>
+                                        време от {{ guestPreview.ranked_users }} в Падок
+                                    </p>
+                                    <p v-if="guestPreview?.gap_ms > 0" class="mt-0.5 text-xs text-zinc-400 tabular-nums">
+                                        На +{{ (guestPreview.gap_ms / 1000).toFixed(3) }} от най-бързия
+                                    </p>
+
+                                    <a
+                                        href="/game/save-lap"
+                                        class="mt-2.5 inline-flex min-h-11 items-center justify-center rounded-xl bg-[#e10600] px-5 py-2 text-sm font-semibold text-white hover:bg-[#c00500]"
+                                    >
+                                        Запази времето
+                                    </a>
+
+                                    <p v-if="guestSaveKept" class="mt-2 text-[11px] text-zinc-400">
+                                        Времето те чака — влез или се регистрирай и то влиза в класацията само.
+                                    </p>
+                                    <p v-else class="mt-2 text-[11px] text-zinc-400">
+                                        Влез, за да записваш времената си в класацията.
+                                    </p>
                                 </div>
 
                                 <!-- Класация -->

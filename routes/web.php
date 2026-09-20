@@ -24,6 +24,7 @@ use App\Http\Controllers\GameVisitController;
 use App\Http\Controllers\HistoryController;
 use App\Http\Controllers\HomeController;
 use App\Http\Controllers\LeaderboardController;
+use App\Http\Controllers\LivePredictionController;
 use App\Http\Controllers\LiveTimingController;
 use App\Http\Controllers\NewsController;
 use App\Http\Controllers\NewsletterController;
@@ -53,6 +54,15 @@ Route::get('/standings', [StandingsController::class, 'index'])->name('standings
 Route::get('/standings/{year}', [StandingsController::class, 'index'])->where('year', '[0-9]{4}')->name('standings.year');
 Route::get('/leaderboard', [LeaderboardController::class, 'index'])->name('leaderboard');
 Route::get('/races/{race}', [RaceController::class, 'show'])->name('races.show');
+
+// „Падок на живо": временното класиране на прогнозите, докато тече
+// състезанието. Панелът пита на 30 s, затова кофата е по-широка от обичайното
+// — един отворен таб прави 2 заявки в минута, а домакинството е кеширано.
+Route::middleware('feature:live_predictions')->group(function () {
+    Route::get('/races/{race}/live-predictions', [LivePredictionController::class, 'show'])
+        ->middleware('throttle:60,1,live-predictions')
+        ->name('races.live-predictions');
+});
 Route::get('/teams', [TeamsController::class, 'index'])->name('teams.index');
 Route::get('/teams/{slug}', [TeamsController::class, 'show'])->name('teams.show');
 Route::get('/drivers', [DriversController::class, 'index'])->name('drivers.index');
@@ -146,6 +156,17 @@ Route::middleware('feature:game')->group(function () {
     Route::post('/game/lap', [GameLeaderboardController::class, 'store'])
         ->middleware(['auth', 'throttle:30,1,game-lap'])
         ->name('game.lap.store');
+    // „Какво би постигнало това време" — публично, защото е за госта, който
+    // още не е влязъл. Не пише нищо, само чете класацията.
+    Route::post('/game/lap/preview', [GameLeaderboardController::class, 'preview'])
+        ->middleware('throttle:30,1,game-lap-preview')
+        ->name('game.lap.preview');
+    // Пътят на госта към запазено време: зад 'auth', за да остави Laravel
+    // intended URL-а в сесията. След вход/регистрация човекът се връща тук,
+    // а оттук — в играта, където чакащата обиколка се изпраща сама.
+    Route::redirect('/game/save-lap', '/game')
+        ->middleware('auth')
+        ->name('game.save-lap');
     // Състезание трае поне няколко минути, а всяко преиграване е ~1–2 s CPU
     // на опашката за цялото поле — затова лимитът е тесен: 3 на минута
     // покриват повторен опит, но не и наводняване на worker-а.

@@ -4,6 +4,7 @@ import DataRecapCard from '@/Components/Homepage/DataRecapCard.vue';
 import ThisDayWidget from '@/Components/Homepage/ThisDayWidget.vue';
 import LiveSessionBanner from '@/Components/LiveSessionBanner.vue';
 import GameTeaserWidget from '@/Components/Homepage/GameTeaserWidget.vue';
+import TsolovMeter from '@/Components/Homepage/TsolovMeter.vue';
 import FeaturedNewsCard from '@/Components/News/FeaturedNewsCard.vue';
 import NewsCard from '@/Components/News/NewsCard.vue';
 import MyLeagueStanding from '@/Components/Predictions/MyLeagueStanding.vue';
@@ -24,6 +25,8 @@ const props = defineProps({
     // Огледалото му: позицията в лигата на вече прогнозиралия. null за гост.
     me: { type: Object, default: null },
     gameTeaser: { type: Object, default: null },
+    // Цоловметърът; null при изключен флаг или несинхронизиран сезон във Ф2.
+    tsolov: { type: Object, default: null },
 });
 
 const page = usePage();
@@ -138,6 +141,10 @@ const restNews = computed(() => props.topNews.slice(1));
 
         <!-- На този ден във Формула 1 (V2) -->
         <ThisDayWidget v-if="features.this_day" :events="thisDay" />
+
+        <!-- Цоловметър над играта: българинът в битка за титла бие всичко
+             останало по причина някой изобщо да отвори сайта. -->
+        <TsolovMeter v-if="tsolov" :tsolov="tsolov" />
 
         <GameTeaserWidget v-if="gameTeaser" :teaser="gameTeaser" />
 

@@ -28,8 +28,8 @@ use Throwable;
  */
 class F2ApiSync
 {
-    /** @var array{rounds:int, sessions:int, results:int, errors:array<int, string>} */
-    private array $stats = ['rounds' => 0, 'sessions' => 0, 'results' => 0, 'errors' => []];
+    /** @var array{rounds:int, sessions:int, results:int, skipped_drivers:int, errors:array<int, string>} */
+    private array $stats = ['rounds' => 0, 'sessions' => 0, 'results' => 0, 'skipped_drivers' => 0, 'errors' => []];
 
     public function __construct(
         private readonly F2ApiClient $client,
@@ -37,13 +37,13 @@ class F2ApiSync
 
     /**
      * @param  callable|null  $onRound  fn (int $round, string $name, int $sessions): void
-     * @return array{season:int, rounds:int, sessions:int, results:int, errors:array<int, string>}
+     * @return array{season:int, rounds:int, sessions:int, results:int, skipped_drivers:int, errors:array<int, string>}
      *
      * @throws F2ApiException
      */
     public function syncSeason(int $year, ?callable $onRound = null): array
     {
-        $this->stats = ['rounds' => 0, 'sessions' => 0, 'results' => 0, 'errors' => []];
+        $this->stats = ['rounds' => 0, 'sessions' => 0, 'results' => 0, 'skipped_drivers' => 0, 'errors' => []];
 
         $meetings = $this->client->meetings($year);
 
@@ -258,6 +258,12 @@ class F2ApiSync
 
         foreach ($rows as $row) {
             $driver = $this->resolveDriver($season, $row);
+
+            // Безименен ред — няма на кого да закачим резултата.
+            if ($driver === null) {
+                continue;
+            }
+
             $position = $this->position($row);
 
             F2Result::query()->updateOrCreate(
@@ -356,32 +362,42 @@ class F2ApiSync
     }
 
     /**
+     * Пилотът зад един ред от API-то, или null когато редът няма самоличност.
+     *
+     * Идентичността е `driverReference` — той оцелява при преименуване, а
+     * slug-ът не. Два записа на един и същ човек („Alex Dunne" от Wikipedia и
+     * „Alexander Dunne" от API-то) се получаваха точно оттук: slug-овете се
+     * разминават, старият ред няма reference, и съпоставянето не хващаше нищо.
+     * Виж `f2:merge-duplicate-drivers` за сливането на вече създадените.
+     *
      * @param  array<string, mixed>  $row
      */
-    private function resolveDriver(F2Season $season, array $row): F2Driver
+    private function resolveDriver(F2Season $season, array $row): ?F2Driver
     {
-        $reference = (string) ($row['driverReference'] ?? '');
-        $first = (string) ($row['driverFirstName'] ?? '');
-        $last = (string) ($row['driverLastName'] ?? '');
+        $reference = trim((string) ($row['driverReference'] ?? ''));
+        $first = trim((string) ($row['driverFirstName'] ?? ''));
+        $last = trim((string) ($row['driverLastName'] ?? ''));
         $slug = Str::slug(trim("{$first} {$last}")) ?: Str::slug($reference);
+
+        // Ред без име И без reference не е пилот. Досега такъв ред създаваше
+        // запис с празен slug — на прод един такъв събра три резултата и се
+        // показваше като безименен ред в класацията. По-лошо: всеки следващ
+        // безименен ред се съпоставяше с него по празния slug и трупаше чужди
+        // резултати в същата купчина.
+        if ($slug === '') {
+            $this->stats['skipped_drivers']++;
+
+            return null;
+        }
 
         $team = $this->resolveTeam($season, $row);
 
-        // Съпоставяме по driverReference — стабилен ключ. Slug-ът е резервен,
-        // за да хванем пилоти, дошли по-рано от Wikipedia без reference.
-        $driver = F2Driver::query()
-            ->where('f2_season_id', $season->id)
-            ->where(function ($query) use ($reference, $slug): void {
-                $query->when($reference !== '', fn ($q) => $q->where('driver_reference', $reference))
-                    ->orWhere('slug', $slug);
-            })
-            ->first();
+        $driver = $this->matchDriver($season, $reference, $slug);
 
         $attributes = [
             'f2_team_id' => $team?->id,
             'first_name' => $first,
             'last_name' => $last,
-            'slug' => $slug,
             'driver_reference' => $reference ?: null,
             'tla' => (string) ($row['driverTLA'] ?? '') ?: null,
             'car_number' => isset($row['racingNumber']) ? (int) $row['racingNumber'] : null,
@@ -392,9 +408,22 @@ class F2ApiSync
         if ($driver === null) {
             return F2Driver::query()->create([
                 'f2_season_id' => $season->id,
+                'slug' => $slug,
                 'country_code' => $country,
                 ...$attributes,
             ]);
+        }
+
+        // Преименуване: новият slug влиза само ако е свободен. (f2_season_id,
+        // slug) е уникален — при зает slug записът щеше да гръмне и да спре
+        // целия синхрон заради козметично поле.
+        if ($driver->slug !== $slug && ! $this->slugTaken($season, $slug, $driver->id)) {
+            $attributes['slug'] = $slug;
+        }
+
+        // Ред без reference го осиновява; ред с чужд reference не се пипа.
+        if ($reference !== '' && filled($driver->driver_reference) && $driver->driver_reference !== $reference) {
+            unset($attributes['driver_reference']);
         }
 
         // Само запълване, не презаписване: записите от Wikipedia и seed-а вече
@@ -406,6 +435,46 @@ class F2ApiSync
         $driver->update($attributes);
 
         return $driver;
+    }
+
+    /**
+     * Съществуващият ред за този пилот: първо по reference, после по slug.
+     *
+     * Редът има значение. Съпоставяне „reference ИЛИ slug" в едно условие
+     * може да върне чужд ред, чийто slug съвпада случайно, преди истинския по
+     * reference.
+     */
+    private function matchDriver(F2Season $season, string $reference, string $slug): ?F2Driver
+    {
+        if ($reference !== '') {
+            $byReference = F2Driver::query()
+                ->where('f2_season_id', $season->id)
+                ->where('driver_reference', $reference)
+                ->first();
+
+            if ($byReference !== null) {
+                return $byReference;
+            }
+        }
+
+        // Резервно по slug — така осиновяваме реда от Wikipedia, който няма
+        // reference. Ред с ДРУГ reference е друг човек и не се пипа.
+        return F2Driver::query()
+            ->where('f2_season_id', $season->id)
+            ->where('slug', $slug)
+            ->where(fn ($query) => $query
+                ->whereNull('driver_reference')
+                ->when($reference !== '', fn ($q) => $q->orWhere('driver_reference', $reference)))
+            ->first();
+    }
+
+    private function slugTaken(F2Season $season, string $slug, int $exceptId): bool
+    {
+        return F2Driver::query()
+            ->where('f2_season_id', $season->id)
+            ->where('slug', $slug)
+            ->whereKeyNot($exceptId)
+            ->exists();
     }
 
     /**

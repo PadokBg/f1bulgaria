@@ -1,5 +1,7 @@
 <script setup>
+import LivePredictionsPanel from '@/Components/Predictions/LivePredictionsPanel.vue';
 import PredictionBreakdown from '@/Components/Predictions/PredictionBreakdown.vue';
+import SharePredictionButton from '@/Components/Predictions/SharePredictionButton.vue';
 import PredictionForm from '@/Components/PredictionForm.vue';
 import OtherPredictions from '@/Components/Races/OtherPredictions.vue';
 import RacePreview from '@/Components/Races/RacePreview.vue';
@@ -23,11 +25,14 @@ const props = defineProps({
     preview: { type: Object, default: null },
     neighbours: { type: Object, default: () => ({ prev: null, next: null }) },
     otherPredictions: { type: Array, default: () => [] },
+    // { rank, total } в рамките на кръга; null преди точкуване.
+    userRaceRank: { type: Object, default: null },
     // Има ли готов анализ на данните за този кръг (страницата му е /danni/{race}).
     hasDataRecap: { type: Boolean, default: false },
 });
 
 const user = computed(() => usePage().props.auth?.user);
+const features = computed(() => usePage().props.features ?? {});
 
 // По подразбиране последната проведена сесия — състезанието, ако го има,
 // иначе квалификацията. Тя е причината човек да отвори страницата.
@@ -65,6 +70,10 @@ const showsTime = computed(() => active.value?.rows.some((r) => r.time));
                 </section>
 
                 <RacePreview v-if="preview" :preview="preview" :circuit="race.circuit" />
+
+                <!-- „Падок на живо": докато тече състезанието, прогнозите се
+                     точкуват по текущите позиции. Панелът сам се крие извън ефир. -->
+                <LivePredictionsPanel v-if="features.live_predictions" :race-id="race.id" />
 
                 <OtherPredictions :predictions="otherPredictions" />
 
@@ -185,6 +194,17 @@ const showsTime = computed(() => active.value?.rows.some((r) => r.time));
                         class="mt-3"
                         :breakdown="userPrediction.breakdown"
                         :total="userPrediction.points ?? 0"
+                    />
+
+                    <!-- При 78 регистрирани единственият реален канал за растеж
+                         е някой да сподели резултата си някъде. -->
+                    <SharePredictionButton
+                        v-if="user"
+                        :race-name="race.name_bg ?? race.name"
+                        :user-name="user.name"
+                        :points="userPrediction.points ?? 0"
+                        :breakdown="userPrediction.breakdown"
+                        :rank="userRaceRank"
                     />
 
                     <Link

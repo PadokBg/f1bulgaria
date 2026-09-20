@@ -8,6 +8,7 @@ use App\Http\Resources\PredictionResource;
 use App\Http\Resources\RaceResource;
 use App\Models\Driver;
 use App\Models\Prediction;
+use App\Models\PredictionScore;
 use App\Models\Race;
 use App\Services\Circuits\CircuitStatsService;
 use App\Services\Predictions\PredictionLockService;
@@ -23,6 +24,32 @@ use Inertia\Response;
 
 class RaceController extends Controller
 {
+    /**
+     * Мястото на една прогноза сред точкуваните за същия кръг.
+     *
+     * Връща null, докато кръгът не е точкуван — картичката за споделяне няма
+     * смисъл преди това.
+     *
+     * @return array{rank: int, total: int}|null
+     */
+    private function raceRank(Race $race, int $predictionId): ?array
+    {
+        $points = PredictionScore::query()
+            ->whereIn('prediction_id', $race->predictions()->select('id'))
+            ->pluck('points', 'prediction_id');
+
+        $mine = $points->get($predictionId);
+
+        if ($mine === null) {
+            return null;
+        }
+
+        return [
+            'rank' => $points->filter(fn ($value) => $value > $mine)->count() + 1,
+            'total' => $points->count(),
+        ];
+    }
+
     public function show(
         Race $race,
         PredictionLockService $lock,
@@ -38,6 +65,7 @@ class RaceController extends Controller
         ]);
 
         $userPrediction = null;
+        $userRaceRank = null;
 
         if ($user = request()->user()) {
             $prediction = $user->predictions()
@@ -46,6 +74,7 @@ class RaceController extends Controller
                 ->first();
 
             $userPrediction = $prediction ? new PredictionResource($prediction) : null;
+            $userRaceRank = $prediction !== null ? $this->raceRank($race, $prediction->id) : null;
         }
 
         // Падащото меню за прогнози е азбучно по показваното (кирилско) име,
@@ -71,6 +100,9 @@ class RaceController extends Controller
             'lockDeadline' => $lock->lockDeadline($race)
                 ?->setTimezone('Europe/Sofia')->format('d.m.Y H:i'),
             'userPrediction' => $userPrediction,
+            // Позицията в кръга — числото, което прави картичката за споделяне
+            // интересна („3-и от 21"), а не просто сбор точки.
+            'userRaceRank' => $userRaceRank,
             'drivers' => $drivers,
             'classifications' => $rows,
             // Между два кръга минават 1-3 седмици — най-дългият прозорец в

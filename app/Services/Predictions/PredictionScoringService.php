@@ -49,10 +49,17 @@ class PredictionScoringService
     }
 
     /**
-     * @param  array{p1:?int,p2:?int,p3:?int,podium:array<int,int>,pole:?int,fastest_lap:?int,dnf_count:int,safety_car:?bool}  $actual
+     * Точкува една прогноза спрямо подадените резултати.
+     *
+     * Публичен, защото същите правила се ползват и от точкуването на живо
+     * (LivePredictionService) — там резултатите са частични и идват от OpenF1
+     * вместо от базата. Неизвестна стойност се подава като null и носи 0
+     * точки, вместо да се брои за сгрешена.
+     *
+     * @param  array{p1:?int,p2:?int,p3:?int,podium:array<int,int>,pole:?int,fastest_lap:?int,dnf_count:?int,safety_car:?bool}  $actual
      * @return array<string, int>
      */
-    private function scorePrediction(Prediction $prediction, array $actual): array
+    public function scorePrediction(Prediction $prediction, array $actual): array
     {
         /** @var array<string, array<string,int>|int> $rules */
         $rules = config('predictions.scoring');
@@ -88,7 +95,9 @@ class PredictionScoringService
         // празното поле щеше да носи точки при състезание без отпаднали.
         $breakdown['dnf'] = 0;
 
-        if ($prediction->dnf_count !== null) {
+        // На живо броят отпаднали още не е окончателен и идва като null —
+        // тогава категорията просто мълчи вместо да наказва.
+        if ($prediction->dnf_count !== null && $actual['dnf_count'] !== null) {
             $dnfDiff = abs($prediction->dnf_count - $actual['dnf_count']);
             $breakdown['dnf'] = match (true) {
                 $dnfDiff === 0 => $rules['dnf_exact'],

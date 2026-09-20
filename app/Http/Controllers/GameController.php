@@ -30,6 +30,11 @@ class GameController extends Controller
             'tracks' => $this->tracks(),
             'weekTrack' => $this->weekTrack->slug(),
             'gameFeedback' => $feedback->prompt($request->user()),
+            // Версиите идват от сървъра, а не от import на sim.js: заделеният
+            // бег на гост се проверява още в лобито, а физиката се зарежда
+            // чак когато човек натисне „Карай".
+            'simVersion' => (int) config('game.sim_version', 3),
+            'raceVersion' => (int) config('game.race_version', 2),
         ]);
     }
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\PreviewGameLapRequest;
 use App\Http\Requests\StoreGameLapRequest;
 use App\Http\Requests\StoreGameRaceRequest;
 use App\Services\Game\LeaderboardService;
@@ -101,6 +102,20 @@ class GameLeaderboardController extends Controller
      * Записва завършена квалификационна обиколка и връща какво е постигнала
      * (лилави полета, личен рекорд, позиция).
      */
+    /**
+     * Какво би постигнало времето на гост, без да се записва. Гостът кара,
+     * вижда „това е 3-то време в Падок" и чак тогава решава дали да влезе —
+     * дотук обиколката му просто изчезваше.
+     */
+    public function preview(PreviewGameLapRequest $request): JsonResponse
+    {
+        $data = $request->validated();
+
+        return response()->json(
+            $this->leaderboard->preview($data['track'], (int) $data['lap_ms'])
+        );
+    }
+
     public function store(StoreGameLapRequest $request): JsonResponse
     {
         $data = $request->validated();

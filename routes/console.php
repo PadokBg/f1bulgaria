@@ -105,6 +105,18 @@ Schedule::command('f1:prediction-reminder')
     ->onOneServer()
     ->withoutOverlapping(55);
 
+// Другата половина на уикенда: какво донесе прогнозата. Вечерта след
+// състезанието, когато резултатите вече са синхронизирани и точкувани —
+// вътрешният guard (последен ТОЧКУВАН кръг + newsletter_sends по race_id)
+// пуска най-много едно писмо на кръг. Флагът features.race_result_mail е
+// изключен, докато политиката не изброи и това писмо: дотогава командата
+// излиза, без да прати нищо.
+Schedule::command('f1:race-result-mail')
+    ->dailyAt('21:30')
+    ->timezone('Europe/Sofia')
+    ->onOneServer()
+    ->withoutOverlapping(60);
+
 // Понеделнишкият анонс на куиза (имейл + пост в канала) — 09:00 софийско.
 // Вътрешният guard (newsletter_sends по седмица) пази от дублиране.
 Schedule::command('padok:quiz-monday')
