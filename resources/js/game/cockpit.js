@@ -42,7 +42,13 @@ export function createCockpit({ lowPower = false } = {}) {
     const controls = [];
 
     const bodyShape = wheelShape();
-    body.push(tinted(extrude(bodyShape, 0.025), 0x252c33));
+    body.push(tinted(extrude(bodyShape, 0.025), 0x52606c));
+    // Paddle edges sit behind the rim, using the same merged shell draw.
+    for (const side of [-1, 1]) {
+        const paddle = box(0.031, 0.13, 0.007, side * 0.172, 0.005, -0.019);
+        body.push(tinted(paddle, 0x707c87));
+        body.push(tinted(box(0.022, 0.119, 0.008, side * 0.172, 0.005, -0.014), 0x242c33));
+    }
     // Thin alloy backing and screen bezel provide depth without a lit material.
     controls.push(tinted(box(0.183, 0.135, 0.009, 0, 0.034, 0.028), 0x4a555f));
     controls.push(tinted(box(0.176, 0.128, 0.012, 0, 0.034, 0.034), 0x090d11));
@@ -63,6 +69,7 @@ export function createCockpit({ lowPower = false } = {}) {
 
         for (const y of [0.085, -0.09]) {
             controls.push(tinted(disc(0.0045, 0.003, side * 0.114, y, 0.03, 6), 0x909a9f));
+            controls.push(tinted(box(0.0045, 0.0011, 0.001, side * 0.114, y, 0.034), 0x18222c));
         }
     }
 
@@ -72,12 +79,20 @@ export function createCockpit({ lowPower = false } = {}) {
         [-0.143, -0.073, 0xde514b], [0.143, -0.073, 0x49b6a8],
     ];
     for (const [x, y, color] of buttons) {
-        controls.push(tinted(disc(0.016, 0.007, x, y, 0.031, segments), 0x080c10));
+        controls.push(tinted(disc(0.0165, 0.007, x, y, 0.031, segments), 0x727b83));
+        controls.push(tinted(disc(0.0145, 0.008, x, y, 0.033, segments), 0x10171e));
         controls.push(tinted(disc(0.012, 0.01, x, y, 0.038, segments), color));
+        controls.push(tinted(box(0.009, 0.0018, 0.001, x, y + 0.005, 0.044), 0xd9e7eb));
     }
     for (const [x, color] of [[-0.057, 0xe46c54], [0.057, 0xd9b04c]]) {
         controls.push(tinted(disc(0.024, 0.008, x, -0.071, 0.032, segments), 0x7a8388));
         controls.push(tinted(disc(0.02, 0.012, x, -0.071, 0.043, 10), color));
+        for (let i = 0; i < 10; i++) {
+            const angle = i * Math.PI / 5;
+            const notch = new THREE.BoxGeometry(0.002, 0.005, 0.002);
+            notch.rotateZ(-angle).translate(x + Math.sin(angle) * 0.018, -0.071 + Math.cos(angle) * 0.018, 0.05);
+            controls.push(tinted(notch, 0x263039));
+        }
         controls.push(tinted(box(0.003, 0.014, 0.002, x, -0.066, 0.05), 0x172029));
     }
 
@@ -85,9 +100,9 @@ export function createCockpit({ lowPower = false } = {}) {
     addMerged(steeringWheel, 'cockpit-wheel-grips', grips, 103);
     addMerged(steeringWheel, 'cockpit-wheel-controls', controls, 104);
 
-    const panelCanvas = makeCanvas(512, 320);
-    if (panelCanvas) drawPanel(panelCanvas.context);
-    const panelTexture = own(textureFromCanvas(panelCanvas?.canvas, [25, 29, 33, 255]));
+    const panelCanvas = makeCanvas(lowPower ? 512 : 1024, lowPower ? 320 : 640);
+    if (panelCanvas) drawPanel(panelCanvas.context, lowPower ? 1 : 2);
+    const panelTexture = own(textureFromCanvas(panelCanvas?.canvas, [25, 29, 33, 255], true));
     const panelMaterial = own(panelMaterialFor(panelTexture));
     const face = own(new THREE.ShapeGeometry(bodyShape, 6));
     const positions = face.attributes.position;
@@ -258,7 +273,8 @@ function tinted(source, hex) {
     const normal = geometry.attributes.normal;
     const colors = new Float32Array(normal.count * 3);
     for (let i = 0; i < normal.count; i++) {
-        const light = 0.65 + Math.max(0, normal.getZ(i)) * 0.25 + Math.max(0, normal.getY(i)) * 0.1;
+        const light = 0.40 + Math.max(0, normal.getZ(i)) * 0.43
+            + Math.max(0, normal.getY(i)) * 0.22 + Math.max(0, -normal.getX(i)) * 0.07;
         colors[i * 3] = color.r * light;
         colors[i * 3 + 1] = color.g * light;
         colors[i * 3 + 2] = color.b * light;
@@ -277,11 +293,11 @@ function makeCanvas(width, height) {
     return context ? { canvas, context } : null;
 }
 
-function textureFromCanvas(canvas, rgba) {
+function textureFromCanvas(canvas, rgba, staticSurface = false) {
     const texture = canvas ? new THREE.CanvasTexture(canvas) : new THREE.DataTexture(new Uint8Array(rgba), 1, 1);
     texture.colorSpace = THREE.SRGBColorSpace;
-    texture.generateMipmaps = false;
-    texture.minFilter = THREE.LinearFilter;
+    texture.generateMipmaps = staticSurface;
+    texture.minFilter = staticSurface ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
     texture.needsUpdate = true;
     return texture;
@@ -291,62 +307,116 @@ function panelMaterialFor(map) {
     return new THREE.MeshBasicMaterial({ map, transparent: true, depthTest: false, depthWrite: false, toneMapped: false, fog: false });
 }
 
-function drawPanel(ctx) {
-    ctx.fillStyle = '#171d23';
+function drawPanel(ctx, scale) {
+    ctx.save();
+    ctx.scale(scale, scale);
+    ctx.fillStyle = '#252c32';
     ctx.fillRect(0, 0, 512, 320);
-    for (let y = 0; y < 320; y += 6) {
-        for (let x = 0; x < 512; x += 6) {
-            ctx.fillStyle = ((x / 6 + y / 6) % 4 < 2) ? '#20272d' : '#14191f';
-            ctx.fillRect(x, y, 5, 2);
-            ctx.fillStyle = '#1b2228';
-            ctx.fillRect(x + 3, y + 2, 2, 4);
+    // Alternating diagonal bundles give the weave depth without a normal map.
+    for (let y = 0; y < 320; y += 4) {
+        for (let x = 0; x < 512; x += 4) {
+            const horizontal = ((x / 4 - y / 4 + 160) % 4) < 2;
+            ctx.fillStyle = horizontal ? '#293139' : '#192128';
+            ctx.fillRect(x, y, 3.5, 3.5);
+            ctx.fillStyle = horizontal ? '#343d43' : '#242d34';
+            for (let thread = 1; thread < 4; thread += 1.5) {
+                ctx.fillRect(x + (horizontal ? 0 : thread), y + (horizontal ? thread : 0), horizontal ? 3.5 : 0.4, horizontal ? 0.4 : 3.5);
+            }
+        }
+    }
+    const satin = ctx.createLinearGradient(0, 0, 470, 320);
+    satin.addColorStop(0, 'rgba(156, 177, 194, 0.14)');
+    satin.addColorStop(0.35, 'rgba(3, 8, 13, 0.05)');
+    satin.addColorStop(1, 'rgba(1, 5, 10, 0.72)');
+    ctx.fillStyle = satin;
+    ctx.fillRect(0, 0, 512, 320);
+    // Lacquered accent and edge highlight follow the flat top of the shell.
+    ctx.fillStyle = '#973035';
+    roundedRect(ctx, 111, 9, 290, 5, 2);
+    ctx.fillStyle = '#e57872';
+    ctx.fillRect(132, 9, 248, 1);
+    ctx.fillStyle = '#778692';
+    ctx.fillRect(180, 19, 152, 1);
+
+    // Engraved rotary scales remain behind their raised physical knobs.
+    for (const x of [-0.057, 0.057]) {
+        const centerX = (x - PANEL_BOUNDS.left) / 0.36 * 512;
+        const centerY = (PANEL_BOUNDS.top + 0.071) / 0.24 * 320;
+        ctx.strokeStyle = '#9aa5ab';
+        ctx.lineWidth = 1.3;
+        for (let i = 0; i < 11; i++) {
+            const a = Math.PI * (0.82 + i * 0.137);
+            ctx.beginPath();
+            ctx.moveTo(centerX + Math.cos(a) * 36, centerY + Math.sin(a) * 34);
+            ctx.lineTo(centerX + Math.cos(a) * 40, centerY + Math.sin(a) * 38);
+            ctx.stroke();
         }
     }
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = '600 12px Arial, sans-serif';
-    ctx.fillStyle = '#c6ced2';
+    ctx.font = '700 12px Arial, sans-serif';
+    ctx.fillStyle = '#e0e7eb';
     for (const [label, x, y] of [
         ['RADIO', -0.141, 0.091], ['OT', 0.141, 0.091],
         ['N', -0.15, 0.019], ['PIT', 0.15, 0.019],
-        ['BB', -0.057, -0.035], ['DIFF', 0.057, -0.035],
+        ['BB', -0.057, -0.043], ['DIFF', 0.057, -0.043],
     ]) {
         ctx.fillText(label, (x - PANEL_BOUNDS.left) / 0.36 * 512, (PANEL_BOUNDS.top - y) / 0.24 * 320);
     }
     ctx.font = '700 13px Arial, sans-serif';
     ctx.fillStyle = '#d6dde0';
     ctx.fillText('PADOK', 256, 297);
+    ctx.restore();
 }
 
 function drawDisplay(ctx, scale, speed, gear, rpm) {
     ctx.save();
     ctx.scale(scale, scale);
-    ctx.fillStyle = '#081218';
+    const glass = ctx.createLinearGradient(0, 0, 512, 320);
+    glass.addColorStop(0, '#192b34');
+    glass.addColorStop(0.5, '#081319');
+    glass.addColorStop(1, '#03090d');
+    ctx.fillStyle = glass;
     ctx.fillRect(0, 0, 512, 320);
+    ctx.fillStyle = '#5c7b88';
+    ctx.fillRect(0, 0, 512, 2);
+    ctx.fillStyle = '#0a1218';
+    roundedRect(ctx, 12, 8, 488, 35, 9);
     const lit = Math.round(THREE.MathUtils.clamp((rpm - 4000) / (SHIFT_RPM - 4000), 0, 1) * 15);
     for (let i = 0; i < 15; i++) {
-        ctx.fillStyle = i < lit ? (i < 5 ? '#41e69e' : i < 10 ? '#fa625b' : '#76b9ff') : '#23313a';
+        const ledColor = i < 5 ? '#41e69e' : i < 10 ? '#fa625b' : '#76b9ff';
+        // Canvas glow is baked at the same 10 Hz as telemetry; no bloom pass.
+        ctx.shadowColor = ledColor;
+        ctx.shadowBlur = i < lit ? 8 : 0;
+        ctx.fillStyle = i < lit ? ledColor : '#23313a';
         roundedRect(ctx, 20 + i * 32, 14, 23, 15, 4);
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = i < lit ? '#d5eeec' : '#33434c';
+        ctx.fillRect(23 + i * 32, 16, 17, 2);
     }
+    ctx.fillStyle = '#1c333e';
+    ctx.fillRect(222, 67, 1, 176);
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#8ca8b8';
-    ctx.font = '600 19px Arial, sans-serif';
+    ctx.fillStyle = '#aac1cc';
+    ctx.font = '600 21px Arial, sans-serif';
     ctx.fillText('GEAR', 31, 66);
     ctx.fillText('KM/H', 271, 66);
-    ctx.fillStyle = '#ecf7fb';
+    ctx.fillStyle = '#f1fbff';
     ctx.font = '700 166px Arial, sans-serif';
     ctx.fillText(gear, 27, 167);
     ctx.font = '700 90px Arial, sans-serif';
     ctx.fillText(String(speed), 255, 155);
-    ctx.fillStyle = '#86a2b2';
+    ctx.fillStyle = '#9bb4c2';
     ctx.font = '600 22px Arial, sans-serif';
     ctx.fillText('RPM', 271, 220);
     ctx.fillStyle = '#d2e8ef';
     ctx.font = '600 30px Arial, sans-serif';
     ctx.fillText(String(rpm), 334, 220);
-    ctx.fillStyle = '#243b46';
+    ctx.fillStyle = '#314952';
     ctx.fillRect(29, 259, 454, 2);
+    ctx.fillStyle = '#48cbae';
+    ctx.fillRect(29, 259, 454 * THREE.MathUtils.clamp(rpm / SHIFT_RPM, 0, 1), 2);
     ctx.fillStyle = '#55d6b2';
     ctx.font = '600 18px Arial, sans-serif';
     ctx.fillText('PADOK', 30, 288);

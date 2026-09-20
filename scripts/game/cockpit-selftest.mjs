@@ -8,6 +8,11 @@ for (const lowPower of [false, true]) {
     const cockpit = createCockpit({ lowPower });
     const hands = cockpit.group.getObjectByName('cockpit-driver-hands');
     const forearms = cockpit.group.getObjectByName('cockpit-driver-forearms');
+    const panelMap = cockpit.group.getObjectByName('cockpit-carbon-panel').material.map;
+    const displayMap = cockpit.group.getObjectByName('cockpit-telemetry').material.map;
+    assert.equal(panelMap.generateMipmaps, true, 'fine carbon weave is filtered when the cockpit gets small');
+    assert.equal(panelMap.minFilter, THREE.LinearMipmapLinearFilter);
+    assert.equal(displayMap.generateMipmaps, false, 'live telemetry avoids regenerating mipmaps on each upload');
     assert.ok(hands && forearms, 'the cockpit includes both gripping hands and connected forearms');
     assert.equal(hands.parent, cockpit.steeringWheel, 'gloves keep their grip when the wheel turns');
     assert.equal(forearms.parent, cockpit.group, 'elbows are independent of wheel rotation');
@@ -88,6 +93,8 @@ const ledPaints = [];
 const context = new Proxy({
     fillText: text => labels.push(String(text)),
     fill() { ledPaints.push(this.fillStyle); },
+    createLinearGradient: () => ({ addColorStop() {} }),
+    createRadialGradient: () => ({ addColorStop() {} }),
 }, {
     get: (target, key) => key in target ? target[key] : () => {},
 });
