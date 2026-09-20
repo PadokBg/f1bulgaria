@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { REDLINE, SHIFT_RPM } from './drivetrain.js';
+import { createCockpitHands } from './cockpitHands.js';
 
 const DISPLAY_INTERVAL = 0.1;
 const WHEEL_DEPTH = 0.62;
@@ -10,7 +11,8 @@ const PANEL_BOUNDS = { left: -0.18, right: 0.18, bottom: -0.115, top: 0.125 };
 /**
  * Camera-space cockpit. The real car supplies the exterior/halo; this small
  * assembly supplies a readable steering wheel at the driver's near plane.
- * Seven draws, no lights or external assets. Solid pieces share one material.
+ * Ten draws including the driver's hands, no lights or external assets.
+ * Solid pieces share one material.
  *
  * @param {{lowPower?: boolean}} [options]
  * @returns {{group: THREE.Group, steeringWheel: THREE.Group, update: Function, dispose: Function}}
@@ -112,6 +114,12 @@ export function createCockpit({ lowPower = false } = {}) {
     display.frustumCulled = false;
     steeringWheel.add(display);
 
+    const driver = createCockpitHands({ lowPower, material: solid });
+    driver.hands.name = 'cockpit-driver-hands';
+    driver.forearms.name = 'cockpit-driver-forearms';
+    steeringWheel.add(driver.hands);
+    group.add(driver.forearms);
+
     const surround = new THREE.Group();
     surround.name = 'cockpit-surround';
     group.add(surround);
@@ -143,7 +151,12 @@ export function createCockpit({ lowPower = false } = {}) {
         const halfHeight = Math.tan(THREE.MathUtils.degToRad(finiteClamp(fov, 25, 110, 55)) / 2) * WHEEL_DEPTH;
         const scale = Math.min(halfHeight / BASE_HALF_HEIGHT, halfHeight * safeAspect / 0.29) * 0.8;
         steeringWheel.scale.setScalar(scale);
-        steeringWheel.position.set(0, -halfHeight * 0.55, -WHEEL_DEPTH);
+        steeringWheel.position.set(0, -halfHeight * 0.52, -WHEEL_DEPTH);
+        // Fingers keep contact with the wheel while elbows stay down beside
+        // the seat. Update every frame, independently of the display throttle.
+        driver.forearms.position.copy(steeringWheel.position);
+        driver.forearms.scale.copy(steeringWheel.scale);
+        driver.update(steeringWheel.rotation.z);
         surround.scale.set(halfHeight / BASE_HALF_HEIGHT, halfHeight / BASE_HALF_HEIGHT, 1);
         fallbackHalo.scale.copy(surround.scale);
         fallbackHalo.visible = !hasModel;
@@ -176,6 +189,7 @@ export function createCockpit({ lowPower = false } = {}) {
         if (disposed) return;
         disposed = true;
         group.removeFromParent();
+        driver.dispose();
         for (const resource of resources) resource.dispose();
         resources.clear();
         group.clear();

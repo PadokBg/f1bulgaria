@@ -6,6 +6,11 @@ import { SHIFT_RPM } from '../../resources/js/game/drivetrain.js';
 // Creation/disposal must work outside a browser as well as on low-power WebGL.
 for (const lowPower of [false, true]) {
     const cockpit = createCockpit({ lowPower });
+    const hands = cockpit.group.getObjectByName('cockpit-driver-hands');
+    const forearms = cockpit.group.getObjectByName('cockpit-driver-forearms');
+    assert.ok(hands && forearms, 'the cockpit includes both gripping hands and connected forearms');
+    assert.equal(hands.parent, cockpit.steeringWheel, 'gloves keep their grip when the wheel turns');
+    assert.equal(forearms.parent, cockpit.group, 'elbows are independent of wheel rotation');
     const geometries = new Set();
     const materials = new Set();
     const textures = new Set();
@@ -27,8 +32,8 @@ for (const lowPower of [false, true]) {
             assert.ok(attribute.array.every(Number.isFinite));
         }
     });
-    assert.ok(meshes <= 10, 'cockpit has a fixed small draw-call budget');
-    assert.ok(triangles < 6000, 'cockpit must remain inexpensive on mobile');
+    assert.ok(meshes <= 12, 'cockpit and driver have a fixed small draw-call budget');
+    assert.ok(triangles < 14000, 'cockpit and driver must remain inexpensive on mobile');
     assert.ok(textures.size <= 2, 'only a static panel and telemetry texture');
 
     const halo = cockpit.group.getObjectByName('cockpit-fallback-halo');
@@ -39,6 +44,9 @@ for (const lowPower of [false, true]) {
     cockpit.steeringWheel.rotation.z = 0.7;
     cockpit.update({ steer: -1, aspect: 2.16, fov: 42 }, 1 / 60);
     assert.equal(cockpit.steeringWheel.rotation.z, 0.7, 'camera owns steering rotation');
+    assert.equal(forearms.rotation.z, 0, 'turning the wheel cannot rotate the elbow frame');
+    assert.ok(forearms.position.equals(cockpit.steeringWheel.position));
+    assert.ok(forearms.scale.equals(cockpit.steeringWheel.scale), 'arms stay attached after a resize or FOV change');
     cockpit.steeringWheel.rotation.z = 0;
 
     for (const [aspect, fov] of [[16 / 9, 55], [2.16, 42], [4 / 3, 65], [0.56, 92]]) {
@@ -46,13 +54,21 @@ for (const lowPower of [false, true]) {
         camera.add(cockpit.group);
         cockpit.update({ aspect, fov, hasModel: true }, 0);
         camera.updateMatrixWorld(true);
-        const bounds = new THREE.Box3().setFromObject(cockpit.steeringWheel);
-        const top = new THREE.Vector3(0, bounds.max.y, bounds.max.z).project(camera);
-        const left = new THREE.Vector3(bounds.min.x, bounds.min.y, bounds.max.z).project(camera);
-        const right = new THREE.Vector3(bounds.max.x, bounds.min.y, bounds.max.z).project(camera);
-        assert.ok(top.y < -0.12, `wheel leaves the road clear at aspect ${aspect}`);
-        assert.ok(left.y > -1, `the full wheel fits below the road at aspect ${aspect}`);
-        assert.ok(left.x > -0.95 && right.x < 0.95, 'grips fit narrow screens');
+        // Project actual surfaces: a combined AABB pairs the nearest knuckle
+        // with the lowest wheel point, creating a corner that does not exist.
+        const bounds = new THREE.Box3();
+        const vertex = new THREE.Vector3();
+        cockpit.steeringWheel.traverse(object => {
+            if (!object.isMesh) return;
+            const positions = object.geometry.attributes.position;
+            for (let i = 0; i < positions.count; i++) {
+                vertex.fromBufferAttribute(positions, i).applyMatrix4(object.matrixWorld).project(camera);
+                bounds.expandByPoint(vertex);
+            }
+        });
+        assert.ok(bounds.max.y < -0.12, `wheel leaves the road clear at aspect ${aspect}`);
+        assert.ok(bounds.min.y > -1, `the full wheel fits below the road at aspect ${aspect}`);
+        assert.ok(bounds.min.x > -0.95 && bounds.max.x < 0.95, 'grips and gloves fit narrow screens');
     }
 
     const resources = [...geometries, ...materials, ...textures];
@@ -82,8 +98,12 @@ const frame = { speedKph: 127, gear: 3, rpm: 10500, aspect: 16 / 9, fov: 55, has
 cockpit.update(frame, 0);
 assert.ok(labels.includes('127') && labels.includes('3'));
 const version = display.material.map.version;
+const sleeve = cockpit.group.getObjectByName('driver-left-forearm');
+const previousPose = sleeve.quaternion.clone();
+cockpit.steeringWheel.rotation.z = 0.7;
 cockpit.update({ ...frame, speedKph: 128 }, 0.04);
 assert.equal(display.material.map.version, version, 'no upload before the 10 Hz interval');
+assert.ok(sleeve.quaternion.angleTo(previousPose) > 0.1, 'driver pose updates even while display uploads are throttled');
 cockpit.update({ ...frame, speedKph: 129 }, 0.06);
 assert.equal(display.material.map.version, version + 1);
 assert.ok(labels.includes('129'), 'paint the newest telemetry, not a stale queued value');
