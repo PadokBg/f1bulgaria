@@ -8,6 +8,11 @@ for (const lowPower of [false, true]) {
     const cockpit = createCockpit({ lowPower });
     const hands = cockpit.group.getObjectByName('cockpit-driver-hands');
     const forearms = cockpit.group.getObjectByName('cockpit-driver-forearms');
+    const shell = cockpit.group.getObjectByName('cockpit-inner-shell');
+    assert.ok(shell, 'the driver sits inside a continuous inner shell');
+    assert.equal(shell.parent, cockpit.group, 'the tub stays fixed while the wheel turns');
+    assert.equal(shell.getObjectByName('cockpit-carbon-tub').material.forceSinglePass, true,
+        'opaque double-sided carbon needs only one pass in the transparent queue');
     const panelMap = cockpit.group.getObjectByName('cockpit-carbon-panel').material.map;
     const displayMap = cockpit.group.getObjectByName('cockpit-telemetry').material.map;
     assert.equal(panelMap.generateMipmaps, true, 'fine carbon weave is filtered when the cockpit gets small');
@@ -39,7 +44,7 @@ for (const lowPower of [false, true]) {
     });
     assert.ok(meshes <= 12, 'cockpit and driver have a fixed small draw-call budget');
     assert.ok(triangles < 14000, 'cockpit and driver must remain inexpensive on mobile');
-    assert.ok(textures.size <= 2, 'only a static panel and telemetry texture');
+    assert.ok(textures.size <= 3, 'only two static surfaces and a telemetry texture');
 
     const halo = cockpit.group.getObjectByName('cockpit-fallback-halo');
     cockpit.update({ hasModel: true, aspect: 16 / 9, fov: 55 }, 0);
@@ -54,7 +59,9 @@ for (const lowPower of [false, true]) {
     assert.ok(forearms.scale.equals(cockpit.steeringWheel.scale), 'arms stay attached after a resize or FOV change');
     cockpit.steeringWheel.rotation.z = 0;
 
-    for (const [aspect, fov] of [[16 / 9, 55], [2.16, 42], [4 / 3, 65], [0.56, 92]]) {
+    const portraitFov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(96) / 2) / 0.56));
+    const narrowFov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(99) / 2) / 0.35));
+    for (const [aspect, fov] of [[16 / 9, 55], [2.16, 42], [4 / 3, 65], [0.56, 92], [0.56, portraitFov], [0.35, narrowFov]]) {
         const camera = new THREE.PerspectiveCamera(fov, aspect, 0.045, 2000);
         camera.add(cockpit.group);
         cockpit.update({ aspect, fov, hasModel: true }, 0);
@@ -74,6 +81,22 @@ for (const lowPower of [false, true]) {
         assert.ok(bounds.max.y < -0.12, `wheel leaves the road clear at aspect ${aspect}`);
         assert.ok(bounds.min.y > -1, `the full wheel fits below the road at aspect ${aspect}`);
         assert.ok(bounds.min.x > -0.95 && bounds.max.x < 0.95, 'grips and gloves fit narrow screens');
+
+        // Keep below the horizon, but above the GLB controls' measured top.
+        // Their world-space top recedes toward the horizon in portrait.
+        let shellTop = -Infinity;
+        shell.traverse(object => {
+            if (!object.isMesh) return;
+            const positions = object.geometry.attributes.position;
+            for (let i = 0; i < positions.count; i++) {
+                vertex.fromBufferAttribute(positions, i).applyMatrix4(object.matrixWorld).project(camera);
+                shellTop = Math.max(shellTop, vertex.y);
+            }
+        });
+        const verticalTangent = Math.tan(THREE.MathUtils.degToRad(fov) / 2);
+        const originalPanelTop = -0.027 / (0.215 * verticalTangent);
+        assert.ok(shellTop < -0.02, `interior leaves the horizon clear at aspect ${aspect}`);
+        assert.ok(shellTop > originalPanelTop, `lining covers the original control cluster at aspect ${aspect}`);
     }
 
     const resources = [...geometries, ...materials, ...textures];

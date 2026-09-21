@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { REDLINE, SHIFT_RPM } from './drivetrain.js';
 import { createCockpitHands } from './cockpitHands.js';
+import { createCockpitShell } from './cockpitShell.js';
 
 const DISPLAY_INTERVAL = 0.1;
 const WHEEL_DEPTH = 0.62;
@@ -11,7 +12,7 @@ const PANEL_BOUNDS = { left: -0.18, right: 0.18, bottom: -0.115, top: 0.125 };
 /**
  * Camera-space cockpit. The real car supplies the exterior/halo; this small
  * assembly supplies a readable steering wheel at the driver's near plane.
- * Ten draws including the driver's hands, no lights or external assets.
+ * Eleven draws including the driver's hands, no lights or external assets.
  * Solid pieces share one material.
  *
  * @param {{lowPower?: boolean}} [options]
@@ -135,16 +136,9 @@ export function createCockpit({ lowPower = false } = {}) {
     steeringWheel.add(driver.hands);
     group.add(driver.forearms);
 
-    const surround = new THREE.Group();
-    surround.name = 'cockpit-surround';
+    const interior = createCockpitShell({ lowPower, material: solid });
+    const surround = interior.group;
     group.add(surround);
-    const edges = [];
-    for (const side of [-1, 1]) {
-        const points = [[side * 0.8, -0.265, -0.72], [side * 0.53, -0.31, -0.74], [side * 0.32, -0.40, -0.7]];
-        edges.push(tinted(tube(points, 0.029, lowPower ? 8 : 12), 0x161c22));
-        edges.push(tinted(tube(points.map(([x, y, z]) => [x, y - 0.026, z + 0.008]), 0.012, 8), 0x3c454c));
-    }
-    addMerged(surround, 'cockpit-padding', edges, 99);
 
     const fallbackHalo = new THREE.Group();
     fallbackHalo.name = 'cockpit-fallback-halo';
@@ -164,6 +158,9 @@ export function createCockpit({ lowPower = false } = {}) {
         if (disposed) return;
         const safeAspect = finiteClamp(aspect, 0.35, 4, 16 / 9);
         const halfHeight = Math.tan(THREE.MathUtils.degToRad(finiteClamp(fov, 25, 110, 55)) / 2) * WHEEL_DEPTH;
+        // The lining follows the body in a wide vertical FOV. A constant screen
+        // height in portrait would expose the GLB's old controls above it.
+        const liningHalfHeight = Math.tan(THREE.MathUtils.degToRad(finiteClamp(fov, 25, 150, 55)) / 2) * WHEEL_DEPTH;
         const scale = Math.min(halfHeight / BASE_HALF_HEIGHT, halfHeight * safeAspect / 0.29) * 0.8;
         steeringWheel.scale.setScalar(scale);
         steeringWheel.position.set(0, -halfHeight * 0.52, -WHEEL_DEPTH);
@@ -172,8 +169,8 @@ export function createCockpit({ lowPower = false } = {}) {
         driver.forearms.position.copy(steeringWheel.position);
         driver.forearms.scale.copy(steeringWheel.scale);
         driver.update(steeringWheel.rotation.z);
-        surround.scale.set(halfHeight / BASE_HALF_HEIGHT, halfHeight / BASE_HALF_HEIGHT, 1);
-        fallbackHalo.scale.copy(surround.scale);
+        surround.scale.set(liningHalfHeight / BASE_HALF_HEIGHT, Math.min(1.25, liningHalfHeight / BASE_HALF_HEIGHT), 1);
+        fallbackHalo.scale.set(halfHeight / BASE_HALF_HEIGHT, halfHeight / BASE_HALF_HEIGHT, 1);
         fallbackHalo.visible = !hasModel;
 
         elapsed = Math.min(DISPLAY_INTERVAL, elapsed + finiteClamp(dt, 0, 1, 0));
@@ -205,6 +202,7 @@ export function createCockpit({ lowPower = false } = {}) {
         disposed = true;
         group.removeFromParent();
         driver.dispose();
+        interior.dispose();
         for (const resource of resources) resource.dispose();
         resources.clear();
         group.clear();
