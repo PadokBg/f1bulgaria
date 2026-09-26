@@ -56,6 +56,8 @@ class GenerateCircuitSvgsCommand extends Command
         'yas_marina' => 'ae-2009',
         'vegas' => 'us-2023',
         'madring' => 'es-2026',
+        // Отмененото Гран при на Бахрейн се кара тук на 04.10.2026.
+        'sepang' => 'my-1999',
     ];
 
     public function handle(): int
