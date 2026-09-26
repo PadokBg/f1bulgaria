@@ -29,6 +29,7 @@ class Race extends Model
         'qualifying_datetime_utc',
         'sprint_datetime_utc',
         'has_sprint',
+        'manual_schedule',
         'pole_driver_id',
         'had_safety_car',
     ];
@@ -41,6 +42,7 @@ class Race extends Model
             'qualifying_datetime_utc' => 'datetime',
             'sprint_datetime_utc' => 'datetime',
             'has_sprint' => 'boolean',
+            'manual_schedule' => 'boolean',
             'had_safety_car' => 'boolean',
         ];
     }
