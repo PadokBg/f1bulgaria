@@ -8,6 +8,7 @@ use App\Models\Driver;
 use App\Models\Prediction;
 use App\Models\Race;
 use App\Services\LiveTiming\OpenF1Client;
+use DateTimeInterface;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 
@@ -32,6 +33,13 @@ class LivePredictionService
      * разликата е 30 заявки към OpenF1 на минута срещу 4.
      */
     private const CACHE_SECONDS = 15;
+
+    /**
+     * С колко часа стартът на сесията в OpenF1 може да се размине с часа на
+     * кръга в базата и пак да е същото състезание. Кръговете са на поне
+     * седмица един от друг, а закъснял старт се мери в часове.
+     */
+    private const SESSION_MATCH_HOURS = 12;
 
     public function __construct(
         private readonly OpenF1Client $openF1,
@@ -62,8 +70,9 @@ class LivePredictionService
     {
         $session = $this->openF1->getLiveSession();
 
-        // Точкуваме само ГЛАВНОТО състезание — прогнозите се отнасят за него.
-        if ($session === null || ! $this->isRaceSession($session)) {
+        // Точкуваме само ГЛАВНОТО състезание НА ТОЗИ кръг — прогнозите се
+        // отнасят за него, не за спринта и не за чуждо състезание.
+        if ($session === null || ! $this->isThisRaceLive($race, $session)) {
             return null;
         }
 
@@ -119,11 +128,29 @@ class LivePredictionService
     }
 
     /**
+     * Тече ли в момента главното състезание точно на този кръг.
+     *
+     * OpenF1 дава session_type „Race" и за спринта — различава ги само
+     * session_name („Sprint" срещу „Race"), както в OpenF1SessionSync::matchRace.
+     * Сверката на часа пази старите кръгове: без нея всяка тяхна страница
+     * точкуваше прогнозите си по подиума на днешното състезание.
+     *
      * @param  array<string, mixed>  $session
      */
-    private function isRaceSession(array $session): bool
+    private function isThisRaceLive(Race $race, array $session): bool
     {
-        return strtolower((string) ($session['type'] ?? '')) === 'race';
+        if (strtolower((string) ($session['name'] ?? '')) !== 'race') {
+            return false;
+        }
+
+        $start = $session['date_start'] ?? null;
+
+        if (! $start instanceof DateTimeInterface || $race->race_datetime_utc === null) {
+            return false;
+        }
+
+        return abs($start->getTimestamp() - $race->race_datetime_utc->getTimestamp())
+            <= self::SESSION_MATCH_HOURS * 3600;
     }
 
     /**

@@ -29,7 +29,8 @@ beforeEach(function () {
 function liveRaceSetup(): array
 {
     $season = Season::factory()->create(['is_current' => true]);
-    $race = Race::factory()->create(['season_id' => $season->id]);
+    // Състезанието тече сега — сесията от OpenF1 се сверява с този час.
+    $race = Race::factory()->create(['season_id' => $season->id, 'race_datetime_utc' => now()]);
 
     $drivers = collect([44, 1, 16, 55])->mapWithKeys(fn (int $number) => [
         $number => Driver::factory()->create([
@@ -47,7 +48,7 @@ function liveRaceSetup(): array
  */
 function fakeLivePositions(array $positions, ?array $session = null): void
 {
-    $session ??= ['key' => 9999, 'type' => 'Race'];
+    $session ??= ['key' => 9999, 'name' => 'Race', 'type' => 'Race', 'date_start' => now()];
 
     test()->mock(OpenF1Client::class, function ($mock) use ($positions, $session) {
         $mock->shouldReceive('getLiveSession')->andReturn($session);
@@ -74,9 +75,49 @@ it('мълчи по време на квалификация — прогноз�
 
     fakeLivePositions([
         ['driver_number' => 44, 'position' => 1, 'date' => '2026-09-26T13:00:00Z'],
-    ], ['key' => 9999, 'type' => 'Qualifying']);
+    ], ['key' => 9999, 'name' => 'Qualifying', 'type' => 'Qualifying', 'date_start' => now()]);
 
     expect(app(LivePredictionService::class)->standings($race))->toBeNull();
+});
+
+it('мълчи по време на спринта, макар OpenF1 да го дава със session_type „Race"', function () {
+    [$race, $drivers] = liveRaceSetup();
+    Prediction::factory()->create(['race_id' => $race->id, 'p1_driver_id' => $drivers[44]->id]);
+
+    // Часът съвпада нарочно — спринтът се отсява само по session_name.
+    fakeLivePositions([
+        ['driver_number' => 44, 'position' => 1, 'date' => '2026-09-26T13:00:00Z'],
+    ], ['key' => 9998, 'name' => 'Sprint', 'type' => 'Race', 'date_start' => now()]);
+
+    expect(app(LivePredictionService::class)->standings($race))->toBeNull();
+});
+
+it('не точкува стар кръг по подиума на днешното състезание', function () {
+    [$race, $drivers] = liveRaceSetup();
+    $past = Race::factory()->create([
+        'season_id' => $race->season_id,
+        'race_datetime_utc' => now()->subWeeks(2),
+    ]);
+
+    foreach ([$race, $past] as $round) {
+        Prediction::factory()->create([
+            'race_id' => $round->id,
+            'p1_driver_id' => $drivers[44]->id,
+            'p2_driver_id' => $drivers[1]->id,
+            'p3_driver_id' => $drivers[16]->id,
+        ]);
+    }
+
+    fakeLivePositions([
+        ['driver_number' => 44, 'position' => 1, 'date' => '2026-09-26T13:40:00Z'],
+        ['driver_number' => 1, 'position' => 2, 'date' => '2026-09-26T13:40:00Z'],
+        ['driver_number' => 16, 'position' => 3, 'date' => '2026-09-26T13:40:00Z'],
+    ]);
+
+    $live = app(LivePredictionService::class);
+
+    expect($live->standings($race))->not->toBeNull()
+        ->and($live->standings($past))->toBeNull();
 });
 
 it('мълчи когато никой не е прогнозирал', function () {
