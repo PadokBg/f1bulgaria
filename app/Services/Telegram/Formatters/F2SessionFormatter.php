@@ -10,6 +10,7 @@ use App\Models\F2RaceSession;
 use App\Models\F2Result;
 use App\Services\Telegram\TelegramText;
 use App\Support\DriverName;
+use App\Support\Ordinal;
 use Illuminate\Support\Collection;
 
 /**
@@ -242,7 +243,7 @@ class F2SessionFormatter
         $name = TelegramText::escape($this->name($result->driver));
         $position = (int) $result->position;
 
-        return "🇧🇬 <b>{$name}</b> — {$position}-и";
+        return "🇧🇬 <b>{$name}</b> — ".Ordinal::bg($position);
     }
 
     /**

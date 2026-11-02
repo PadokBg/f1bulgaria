@@ -140,6 +140,9 @@ class RaceClassificationProvider
                 'driver' => $this->driverName($row),
                 // Без пилот от ростъра няма и страница, към която да водим.
                 'slug' => $row->driver?->slug,
+                // Кой е пилотът и когато е извън ростъра — за съпоставяне
+                // (кого постът да допише под първите десет), не за линк.
+                'name_slug' => $this->nameSlug($row),
                 'team' => $row->driver?->constructor?->name
                     ?? ($row instanceof SessionResult ? $row->team_name : null),
                 'time' => $row instanceof SessionResult ? $row->bestQualifyingTime() : null,
@@ -162,9 +165,26 @@ class RaceClassificationProvider
         }
 
         if ($row instanceof SessionResult && filled($row->driver_name)) {
-            return DriverName::display(Str::slug($row->driver_name), $row->driver_name);
+            return DriverName::display($this->nameSlug($row), $row->driver_name);
         }
 
         return null;
+    }
+
+    /**
+     * Slug-ът на пилота: от ростъра, а извън него — от името в класацията.
+     *
+     * Ростърът пише slug-а като пълното име през тире („alexander-albon"),
+     * така че новак и титуляр със същото име дават един и същ ключ.
+     */
+    private function nameSlug(Result|SessionResult $row): ?string
+    {
+        if ($row->driver !== null) {
+            return $row->driver->slug;
+        }
+
+        return $row instanceof SessionResult && filled($row->driver_name)
+            ? Str::slug($row->driver_name)
+            : null;
     }
 }

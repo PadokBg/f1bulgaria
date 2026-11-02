@@ -228,7 +228,52 @@ it('показва в поста за тренировка и новака из�
     $body = ChannelPost::query()->where('kind', ChannelPostKind::F1Fp1->value)->sole()->body;
 
     expect($body)->toContain('<b>Никола Цолов</b> · RB F1 Team · 1:19.604 · +1.476')
-        ->and($body)->toContain('<b>Арвид Линдблад</b> · RB F1 Team');
+        ->and($body)->toContain('<b>Арвид Линдблад</b> · RB F1 Team')
+        // Вече е в показаните редове — не се дописва втори път.
+        ->and($body)->not->toContain('🇧🇬');
+});
+
+it('дописва Цолов под първите десет, когато е извън тях', function () {
+    $race = f1Race();
+
+    RaceSession::query()->create([
+        'race_id' => $race->id,
+        'type' => SessionType::FP1->value,
+        'scheduled_at_utc' => now()->subHours(10),
+    ]);
+
+    foreach (range(1, 11) as $position) {
+        $driver = f1Driver($race, "Driver{$position}", 'Test', "driver{$position}-test", "Team {$position}");
+
+        SessionResult::query()->create([
+            'race_id' => $race->id,
+            'session_type' => SessionType::FP1->value,
+            'driver_id' => $driver->id,
+            'position' => $position,
+            'source' => 'openf1',
+        ]);
+    }
+
+    // Мексико 2026: новак извън ростъра, 12-и — постът показва само първите десет.
+    SessionResult::query()->create([
+        'race_id' => $race->id,
+        'session_type' => SessionType::FP1->value,
+        'driver_id' => null,
+        'driver_number' => 91,
+        'driver_name' => 'Nikola Tsolov',
+        'team_name' => 'RB F1 Team',
+        'position' => 12,
+        'best_time' => '1:19.604',
+        'source' => 'openf1',
+    ]);
+
+    app(F1ChannelEnqueuer::class)->enqueuePending();
+
+    $body = ChannelPost::query()->where('kind', ChannelPostKind::F1Fp1->value)->sole()->body;
+
+    expect($body)->toContain('🇧🇬 <b>Никола Цолов</b> — 12-и')
+        ->and($body)->not->toContain('12. <b>Никола Цолов</b>')
+        ->and($body)->not->toContain('Driver11');
 });
 
 it('не наваксва състезания извън прозореца', function () {

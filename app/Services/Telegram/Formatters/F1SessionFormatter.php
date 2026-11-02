@@ -9,6 +9,7 @@ use App\Models\Race;
 use App\Services\Races\RaceClassificationProvider;
 use App\Services\Telegram\TelegramText;
 use App\Support\DriverName;
+use App\Support\Ordinal;
 
 /**
  * Съставя поста за сесия от Формула 1.
@@ -45,6 +46,13 @@ class F1SessionFormatter
 
         foreach (array_slice($section['rows'], 0, self::VISIBLE_POSITIONS) as $row) {
             $lines[] = $this->line($row);
+        }
+
+        $highlight = $this->highlightLine($section['rows']);
+
+        if ($highlight !== null) {
+            $lines[] = '';
+            $lines[] = $highlight;
         }
 
         $retired = collect($section['rows'])
@@ -87,6 +95,36 @@ class F1SessionFormatter
             $this->classifications->raceName($race),
             $race->round !== null ? "кръг {$race->round}" : null,
         ])->filter()->implode(' · ');
+    }
+
+    /**
+     * Българинът, ако е извън първите десет — както в постовете за Формула 2.
+     *
+     * Редакционно, не техническо (config/channel.php, highlight_driver_slugs):
+     * аудиторията отваря поста заради Цолов. 12-и във FP1 в Мексико 2026, той
+     * изпадаше от поста, точно когато беше новината.
+     *
+     * @param  array<int, array<string, mixed>>  $rows
+     */
+    private function highlightLine(array $rows): ?string
+    {
+        /** @var array<int, string> $slugs */
+        $slugs = (array) config('channel.highlight_driver_slugs', []);
+
+        if ($slugs === []) {
+            return null;
+        }
+
+        $row = collect($rows)
+            ->skip(self::VISIBLE_POSITIONS)
+            ->first(fn (array $row): bool => $row['position'] !== null
+                && in_array($row['name_slug'] ?? null, $slugs, strict: true));
+
+        if ($row === null) {
+            return null;
+        }
+
+        return '🇧🇬 <b>'.TelegramText::escape((string) $row['driver']).'</b> — '.Ordinal::bg((int) $row['position']);
     }
 
     /**
