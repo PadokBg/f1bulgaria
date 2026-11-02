@@ -25,6 +25,8 @@ beforeEach(function () {
     $this->race = Race::factory()->create([
         'season_id' => $this->season->id,
         'round' => 21,
+        // Пистата от фикстурите — синхронът отказва резултати от друга писта.
+        'jolpica_id' => 'interlagos',
         'name' => 'São Paulo Grand Prix',
         'has_sprint' => true,
     ]);

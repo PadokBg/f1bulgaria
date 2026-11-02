@@ -108,6 +108,8 @@ const submit = () => {
                     <option :value="true">Да</option>
                     <option :value="false">Не</option>
                 </select>
+                <!-- Правилото живее в config/predictions.php (safety_car.count_virtual). -->
+                <p class="mt-1 text-xs text-zinc-500">Брои се само истинският safety car — виртуалният (VSC) не.</p>
                 <InputError class="mt-1" :message="form.errors.safety_car" />
             </div>
         </fieldset>

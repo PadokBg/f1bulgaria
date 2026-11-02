@@ -12,6 +12,7 @@ use App\Services\Predictions\LeaderboardService;
 use App\Services\Telegram\F1ChannelEnqueuer;
 use Illuminate\Console\Command;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 class SyncResultsCommand extends Command
@@ -57,6 +58,10 @@ class SyncResultsCommand extends Command
                 // Едно провалено състезание не спира останалите — иначе един
                 // проблемен кръг блокира и наваксването на всички след него.
                 $this->error("Кръг {$race->round}: синхронът се провали — {$e->getMessage()}");
+                // Изходът от крона не се пази никъде — без лога разминат
+                // календар (ResultSyncService отказва чужди резултати) би спрял
+                // точкуването напълно тихо.
+                Log::error("f1:sync-results race {$race->id} (кръг {$race->round}): {$e->getMessage()}");
                 $failed = true;
 
                 continue;
@@ -97,8 +102,8 @@ class SyncResultsCommand extends Command
      * без резултати ЗАВИНАГИ — а с него и прогнозите за него, неоценени.
      *
      * Последното се пре-синхронизира при всяко пускане нарочно: така
-     * промените от стюардите влизат, а прогнозите се преточкуват, когато
-     * админът въведе сейфти кара (той няма източник и се попълва ръчно).
+     * промените от стюардите влизат, а safety car, за който OpenF1 още не е
+     * бил готов, се доопределя и прогнозите се преточкуват.
      *
      * @return Collection<int, Race>
      */

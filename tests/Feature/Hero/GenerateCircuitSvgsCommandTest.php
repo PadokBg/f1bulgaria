@@ -68,3 +68,17 @@ it('има контур за всяка писта от календара — h
 
     expect($missing)->toBe([]);
 });
+
+it('има контур за всяка писта от реалния календар на Jolpica', function () {
+    // Пистите на играта не са целият календар: Сепанг (04.10.2026) влезе със
+    // синхрона на календара и hero-то му показваше само името.
+    $calendar = json_decode(File::get(base_path('tests/Fixtures/jolpica/calendar_2026.json')), true);
+
+    $missing = collect($calendar['MRData']['RaceTable']['Races'])
+        ->pluck('Circuit.circuitId')
+        ->reject(fn (string $slug): bool => File::exists(resource_path("svg/circuits/{$slug}.svg")))
+        ->values()
+        ->all();
+
+    expect($missing)->toBe([]);
+});

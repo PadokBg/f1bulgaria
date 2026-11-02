@@ -45,6 +45,9 @@
         <env name="NEWS_LLM_DRIVER" value="anthropic"/>
         <env name="OPENF1_USERNAME" value=""/>
         <env name="OPENF1_PASSWORD" value=""/>
+        <!-- Синхронът на резултати пита OpenF1 за safety car. Тестовете, които
+             го проверяват, го включват сами и фалшифицират отговора. -->
+        <env name="PREDICTIONS_SAFETY_CAR_AUTODETECT" value="(false)"/>
         <!-- V2 feature flags ON in tests, за да се тества кодът зад тях. -->
         <env name="FEATURE_COMPARE" value="true"/>
         <env name="FEATURE_RIVALRIES" value="true"/>

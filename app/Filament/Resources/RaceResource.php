@@ -49,17 +49,21 @@ class RaceResource extends Resource
             DateTimePicker::make('qualifying_datetime_utc')->label('Квалификация (UTC)'),
             DateTimePicker::make('sprint_datetime_utc')->label('Спринт (UTC)'),
             Toggle::make('has_sprint')->label('Спринт уикенд'),
+            Toggle::make('manual_schedule')
+                ->label('Ръчни часове')
+                ->helperText('Календарът се синхронизира от Jolpica два пъти на ден. Включи, когато поправяш час преди Jolpica — иначе поправката се връща. Изключи, щом Jolpica се обнови.'),
             Select::make('pole_driver_id')
                 ->label('Pole пилот')
                 ->relationship('poleDriver', 'last_name')
                 ->getOptionLabelFromRecordUsing(fn ($record) => $record->fullName())
                 ->searchable(),
-            // Ръчно поле — Ergast не дава safety car. null = неизвестно (не се точкува).
+            // Попълва се от OpenF1 (SafetyCarDetector); ръчната стойност има
+            // предимство. null = неизвестно (не се точкува).
             Select::make('had_safety_car')
                 ->label('Имаше ли safety car?')
                 ->options([1 => 'Да', 0 => 'Не'])
                 ->placeholder('Неизвестно')
-                ->helperText('Въведи ръчно след състезанието, за да се точкува тази прогноза.'),
+                ->helperText('Попълва се автоматично от OpenF1 след състезанието; виртуалният (VSC) не се брои. Ръчно въведената стойност не се презаписва.'),
         ]);
     }
 
