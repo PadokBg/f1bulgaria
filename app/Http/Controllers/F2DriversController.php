@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
+use App\Enums\F2SessionType;
 use App\Models\F2Driver;
 use App\Models\F2RaceSession;
 use App\Models\F2Result;
@@ -73,13 +74,22 @@ class F2DriversController extends Controller
      */
     private function careerStats(Collection $entries, Collection $ids): array
     {
-        $results = F2Result::query()->whereIn('f2_driver_id', $ids);
+        // Само състезания: от 2026 API синхронът пази и класациите от
+        // тренировките и квалификациите, а първо място там не е победа.
+        $results = F2Result::query()
+            ->whereIn('f2_driver_id', $ids)
+            ->whereHas('session', fn ($query) => $query->whereIn('session_type', F2SessionType::races()));
 
         return [
             'starts' => (clone $results)->count(),
             'wins' => (clone $results)->where('position', 1)->count(),
             'podiums' => (clone $results)->whereNotNull('position')->where('position', '<=', 3)->count(),
-            'poles' => F2RaceSession::query()->whereIn('pole_position_driver_id', $ids)->count(),
+            // Pole-ът стои и върху квалификацията, и върху главното, където го
+            // пренася F2ApiSync::propagatePole — броим го веднъж, по главните.
+            'poles' => F2RaceSession::query()
+                ->whereIn('pole_position_driver_id', $ids)
+                ->whereIn('session_type', [F2SessionType::FeatureRace, F2SessionType::SecondFeatureRace])
+                ->count(),
             'championships' => $entries->where('is_champion', true)->count(),
             'seasons' => $entries->count(),
         ];
@@ -111,17 +121,28 @@ class F2DriversController extends Controller
     {
         return F2Result::query()
             ->whereIn('f2_driver_id', $ids)
-            ->with(['session.race.season'])
+            ->with(['session.race.season', 'session.race.sessions:id,f2_race_id,session_type'])
             ->get()
-            ->sortByDesc(fn (F2Result $r) => [$r->session?->race?->season?->year ?? 0, $r->session?->race?->round ?? 0])
+            // В рамките на кръга — от последната сесия към първата, иначе
+            // тренировката излизаше преди състезанията по реда на вмъкване.
+            ->sortByDesc(fn (F2Result $r) => [
+                $r->session?->race?->season?->year ?? 0,
+                $r->session?->race?->round ?? 0,
+                $r->session?->session_type?->order() ?? 0,
+            ])
             ->take(10)
             ->values()
             ->map(fn (F2Result $r) => [
                 'year' => $r->session?->race?->season?->year,
                 'location' => $r->session?->race?->location_name,
-                'session' => $r->session?->session_type?->label(),
+                'session' => $r->session?->session_type?->labelInRound((bool) $r->session?->race?->sessions->contains(
+                    fn (F2RaceSession $s): bool => $s->session_type === F2SessionType::SecondFeatureRace,
+                )),
                 'race_slug' => $r->session?->race?->slug,
-                'session_type' => $r->session?->session_type?->value === 'feature_race' ? 'feature' : 'sprint',
+                // Отрязъкът за линка към класацията. Беше „feature" или
+                // „sprint" — отпреди тренировките и квалификациите да имат
+                // резултати, — тоест те и второто главно сочеха към спринта.
+                'session_type' => $r->session?->session_type?->urlSegment(),
                 'position' => $r->position,
                 'status' => $r->status,
                 'points' => (float) $r->points,

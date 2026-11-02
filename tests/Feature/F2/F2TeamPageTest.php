@@ -52,6 +52,17 @@ it('/f2/teams/{slug} показва Campos с Цолов', function () {
             ->has('alumni', 1));
 });
 
+it('/f2/teams/{slug} не брои P1 от тренировка за победа', function () {
+    seedCampos();
+    $practice = F2RaceSession::create(['f2_race_id' => F2Race::query()->value('id'), 'session_type' => F2SessionType::Practice]);
+    F2Result::create(['f2_race_session_id' => $practice->id, 'f2_driver_id' => F2Driver::query()->value('id'), 'position' => 1]);
+
+    $this->get('/f2/teams/campos-racing')
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('stats.wins', 1)
+            ->where('stats.podiums', 1));
+});
+
 it('връща 404 за несъществуващ F2 отбор', function () {
     $this->get('/f2/teams/nonexistent')->assertNotFound();
 });

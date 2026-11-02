@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
+use App\Enums\F2SessionType;
 use App\Models\F2Driver;
 use App\Models\F2Result;
 use App\Models\F2Season;
@@ -47,6 +48,12 @@ class F2TeamsController extends Controller
         $driverIds = $entries->flatMap(fn (F2Team $t) => $t->drivers->pluck('id'));
         $allDrivers = $entries->flatMap->drivers;
 
+        // Само състезания — класациите от тренировките и квалификациите (API
+        // синхронът ги пази от 2026) не са победи и подиуми.
+        $raceResults = F2Result::query()
+            ->whereIn('f2_driver_id', $driverIds)
+            ->whereHas('session', fn ($query) => $query->whereIn('session_type', F2SessionType::races()));
+
         return Inertia::render('F2/TeamShow', [
             'team' => [
                 'slug' => $slug,
@@ -54,8 +61,8 @@ class F2TeamsController extends Controller
             ],
             'stats' => [
                 'seasons' => $entries->count(),
-                'wins' => F2Result::query()->whereIn('f2_driver_id', $driverIds)->where('position', 1)->count(),
-                'podiums' => F2Result::query()->whereIn('f2_driver_id', $driverIds)->whereNotNull('position')->where('position', '<=', 3)->count(),
+                'wins' => (clone $raceResults)->where('position', 1)->count(),
+                'podiums' => (clone $raceResults)->whereNotNull('position')->where('position', '<=', 3)->count(),
                 'championships' => $allDrivers->where('is_champion', true)->count(),
             ],
             'currentDrivers' => $latest->drivers->map(fn ($d) => [
