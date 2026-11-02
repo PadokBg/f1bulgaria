@@ -271,8 +271,9 @@ class OpenF1SessionSync
             return 0;
         }
 
-        // Класацията носи само номера на болида — имената идват отделно.
-        $entrants = $this->client->getSessionDrivers($sessionKey)->keyBy('driver_number');
+        // Класацията носи само номера на болида — имената идват отделно. Тук
+        // сесията е приключила, затова списъкът се пази седмица, не 5 минути.
+        $entrants = $this->client->getFinishedSessionDrivers($sessionKey)->keyBy('driver_number');
         $drivers = $this->matchRoster(
             $roster,
             $rows->map(fn (array $row): int => (int) $row['driver_number']),

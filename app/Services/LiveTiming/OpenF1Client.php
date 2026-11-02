@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\LiveTiming;
 
+use DateTimeInterface;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
@@ -25,6 +26,9 @@ class OpenF1Client
 
     /** Изчакване след 429, умножено по номера на опита. */
     private const RETRY_BACKOFF_MS = 1500;
+
+    /** Колко се помни празен отговор — виж rememberNonEmpty(). */
+    private const EMPTY_RESPONSE_TTL_SECONDS = 60;
 
     /**
      * Най-малкото разстояние между две заявки, по подразбиране.
@@ -128,20 +132,49 @@ class OpenF1Client
      */
     public function getSessionDrivers(int $sessionKey): Collection
     {
-        return Cache::remember("openf1:drivers:{$sessionKey}", now()->addMinutes(5), function () use ($sessionKey) {
-            return $this->get('drivers', ['session_key' => $sessionKey])
-                ->filter(fn ($d) => is_array($d) && isset($d['driver_number']))
-                ->map(fn ($d) => [
-                    'driver_number' => (int) $d['driver_number'],
-                    'name_acronym' => $d['name_acronym'] ?? null,
-                    'full_name' => $d['full_name'] ?? null,
-                    'first_name' => $d['first_name'] ?? null,
-                    'last_name' => $d['last_name'] ?? null,
-                    'team_name' => $d['team_name'] ?? null,
-                    'team_colour' => isset($d['team_colour']) ? '#'.ltrim((string) $d['team_colour'], '#') : null,
-                ])
-                ->values();
-        });
+        return $this->rememberNonEmpty(
+            "openf1:drivers:{$sessionKey}",
+            now()->addMinutes(5),
+            fn (): Collection => $this->fetchSessionDrivers($sessionKey),
+        );
+    }
+
+    /**
+     * Пилотите на ПРИКЛЮЧИЛА сесия — кеш седмица, защото списъкът вече не се мени.
+     *
+     * Синхронът на класациите минава през всяка приключила сесия на сезона на
+     * 15 минути. С петминутния кеш на живите сесии това бяха ~85 заявки на
+     * пускане — над лимита от 30/мин без токен, и новаците във FP1 оставаха
+     * без имена (02.11.2026).
+     *
+     * @return Collection<int, array{driver_number:int, name_acronym:?string, full_name:?string, first_name:?string, last_name:?string, team_name:?string, team_colour:?string}>
+     */
+    public function getFinishedSessionDrivers(int $sessionKey): Collection
+    {
+        return $this->rememberNonEmpty(
+            "openf1:drivers-final:{$sessionKey}",
+            now()->addDays(7),
+            fn (): Collection => $this->fetchSessionDrivers($sessionKey),
+        );
+    }
+
+    /**
+     * @return Collection<int, array{driver_number:int, name_acronym:?string, full_name:?string, first_name:?string, last_name:?string, team_name:?string, team_colour:?string}>
+     */
+    private function fetchSessionDrivers(int $sessionKey): Collection
+    {
+        return $this->get('drivers', ['session_key' => $sessionKey])
+            ->filter(fn ($d) => is_array($d) && isset($d['driver_number']))
+            ->map(fn ($d) => [
+                'driver_number' => (int) $d['driver_number'],
+                'name_acronym' => $d['name_acronym'] ?? null,
+                'full_name' => $d['full_name'] ?? null,
+                'first_name' => $d['first_name'] ?? null,
+                'last_name' => $d['last_name'] ?? null,
+                'team_name' => $d['team_name'] ?? null,
+                'team_colour' => isset($d['team_colour']) ? '#'.ltrim((string) $d['team_colour'], '#') : null,
+            ])
+            ->values();
     }
 
     /**
@@ -155,11 +188,13 @@ class OpenF1Client
      */
     public function getSeasonSessions(int $year): Collection
     {
-        return Cache::remember("openf1:sessions:{$year}", now()->addMinutes(30), function () use ($year) {
-            return $this->get('sessions', ['year' => $year])
+        return $this->rememberNonEmpty(
+            "openf1:sessions:{$year}",
+            now()->addMinutes(30),
+            fn (): Collection => $this->get('sessions', ['year' => $year])
                 ->filter(fn ($s) => is_array($s) && isset($s['session_key']))
-                ->values();
-        });
+                ->values(),
+        );
     }
 
     /**
@@ -180,11 +215,13 @@ class OpenF1Client
      */
     public function getSessionResult(int $sessionKey): Collection
     {
-        return Cache::remember("openf1:session-result:{$sessionKey}", now()->addHours(6), function () use ($sessionKey) {
-            return $this->get('session_result', ['session_key' => $sessionKey])
+        return $this->rememberNonEmpty(
+            "openf1:session-result:{$sessionKey}",
+            now()->addHours(6),
+            fn (): Collection => $this->get('session_result', ['session_key' => $sessionKey])
                 ->filter(fn ($r) => is_array($r) && isset($r['driver_number']))
-                ->values();
-        });
+                ->values(),
+        );
     }
 
     /**
@@ -511,6 +548,42 @@ class OpenF1Client
         }
 
         return Cache::remember($key, now()->addDay(), $fetch);
+    }
+
+    /**
+     * Кеш, който не пази провали.
+     *
+     * get() връща празна колекция и при 429, 5xx или мрежова грешка. С
+     * Cache::remember такъв провал стоеше в кеша за целия срок: класацията на
+     * сесия — празна до 6 часа, новаците във FP1 — без имена (02.11.2026).
+     * Празният отговор се пази само минута, колкото да не се удря OpenF1 при
+     * всяко извикване. Кеширан по стария начин празен отговор се брои за
+     * липсващ.
+     *
+     * @param  callable(): Collection<int, mixed>  $fetch
+     * @return Collection<int, mixed>
+     */
+    private function rememberNonEmpty(string $key, DateTimeInterface $ttl, callable $fetch): Collection
+    {
+        $cached = Cache::get($key);
+
+        if ($cached instanceof Collection && $cached->isNotEmpty()) {
+            return $cached;
+        }
+
+        if (Cache::has("{$key}:empty")) {
+            return collect();
+        }
+
+        $fresh = $fetch();
+
+        if ($fresh->isNotEmpty()) {
+            Cache::put($key, $fresh, $ttl);
+        } else {
+            Cache::put("{$key}:empty", true, now()->addSeconds(self::EMPTY_RESPONSE_TTL_SECONDS));
+        }
+
+        return $fresh;
     }
 
     /**

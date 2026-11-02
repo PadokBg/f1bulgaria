@@ -175,6 +175,42 @@ it('повтаря при 429 и се отказва след третия оп�
     Http::assertSentCount(3);
 });
 
+it('не пази провала: празният отговор се помни само минута', function () {
+    Http::fake(['*/session_result*' => Http::sequence()
+        ->push('error', 500)
+        ->push([['driver_number' => 1, 'position' => 1]])]);
+
+    expect(client()->getSessionResult(9999))->toBeEmpty()
+        // Веднага след провала — без нова заявка към OpenF1.
+        ->and(client()->getSessionResult(9999))->toBeEmpty();
+    Http::assertSentCount(1);
+
+    $this->travel(61)->seconds();
+
+    expect(client()->getSessionResult(9999))->toHaveCount(1);
+    Http::assertSentCount(2);
+});
+
+it('не вярва на празен отговор, кеширан по стария начин', function () {
+    // Така Cache::remember пазеше провала — до 6 часа.
+    Cache::put('openf1:session-result:9999', collect(), now()->addHours(6));
+    Http::fake(['*/session_result*' => Http::response([['driver_number' => 91, 'position' => 12]])]);
+
+    expect(client()->getSessionResult(9999))->toHaveCount(1);
+});
+
+it('пази пилотите на приключила сесия седмица', function () {
+    Http::fake(['*/drivers*' => Http::response([
+        ['driver_number' => 91, 'name_acronym' => 'TSO', 'first_name' => 'Nikola', 'last_name' => 'Tsolov', 'team_name' => 'Racing Bulls'],
+    ])]);
+
+    client()->getFinishedSessionDrivers(9999);
+    $this->travel(3)->days();
+
+    expect(client()->getFinishedSessionDrivers(9999)->first()['last_name'])->toBe('Tsolov');
+    Http::assertSentCount(1);
+});
+
 it('не повтаря при 404 — то няма да се оправи от само себе си', function () {
     Http::fake(['*stints*' => Http::response('not found', 404)]);
 
