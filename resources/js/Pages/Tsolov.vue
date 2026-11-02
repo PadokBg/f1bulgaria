@@ -79,7 +79,7 @@ const tsolovShare = computed(() => {
 <template>
 
     <PublicLayout>
-        <!-- Hero банер — актуално позициониране като лидер във Формула 2 -->
+        <!-- Hero банер — картина без текст; позицията в шампионата е под него, живо от базата -->
         <section class="relative overflow-hidden rounded-2xl">
             <picture>
                 <source media="(max-width: 767px)" srcset="/images/banners/tsolov/tsolov-750x600.webp" type="image/webp" />
@@ -89,7 +89,7 @@ const tsolovShare = computed(() => {
                 <source media="(min-width: 1280px)" srcset="/images/banners/tsolov/tsolov-1600x500.webp" type="image/webp" />
                 <img
                     src="/images/banners/tsolov/tsolov-1600x500.jpg"
-                    :alt="`${profile.name} — лидер на Формула 2 2026`"
+                    :alt="`${profile.name} — банер с болид на писта`"
                     class="block h-auto w-full object-cover"
                     loading="eager"
                     width="1600"
