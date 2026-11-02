@@ -327,6 +327,24 @@ class OpenF1Client
     }
 
     /**
+     * Същото като getRaceControl(), но без кеш — за решения, които се
+     * записват в базата (safety car за точкуването на прогнозите).
+     *
+     * Дневният кеш пази всякакъв отговор, включително празния при провал и
+     * частичния, ако е дръпнат преди финала. За графика това е поносимо; за
+     * точки не е — грешният отговор щеше да се запише завинаги. Викащият
+     * решава кога данните са окончателни (виж SafetyCarDetector).
+     *
+     * @return Collection<int, array<string, mixed>>
+     */
+    public function getRaceControlUncached(int $sessionKey): Collection
+    {
+        return $this->get('race_control', ['session_key' => $sessionKey])
+            ->filter(fn ($r) => is_array($r) && isset($r['date']))
+            ->values();
+    }
+
+    /**
      * Метеото над пистата — по един запис в минута, покрива и часа преди старта.
      *
      * @return Collection<int, array<string, mixed>>

@@ -39,6 +39,26 @@ Schedule::command('f1:sync-results')
     ->everyFifteenMinutes()
     ->withoutOverlapping(14);
 
+// Календарът от Jolpica. Досега се синхронизираше само на ръка и остана от
+// 18.07.2026 — пропусна вмъкнатия кръг в Малайзия (04.10). Резултатите се
+// теглят по номер на кръга, така че разминат календар значи и чужди
+// резултати; ResultSyncService вече го хваща, но само календарът го оправя.
+// Една заявка към Jolpica — може и два пъти на ден.
+Schedule::command('f1:sync-calendar')
+    ->twiceDailyAt(5, 17, 10)
+    ->timezone('Europe/Sofia')
+    ->withoutOverlapping()
+    ->onOneServer();
+
+// Safety car от OpenF1 за кръговете, които f1:sync-results не успя да
+// реши, докато бяха последни (OpenF1 още не е имал данните). Обичайно
+// няма какво да прави.
+Schedule::command('f1:sync-safety-car')
+    ->dailyAt('05:30')
+    ->timezone('Europe/Sofia')
+    ->withoutOverlapping()
+    ->onOneServer();
+
 // Разписание на сесиите + класации от тренировките и спринт квалификацията.
 //
 // Разписанието е критично, не украса: `race_sessions` се чете от

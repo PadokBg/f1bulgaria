@@ -184,16 +184,30 @@ class JolpicaClient
     }
 
     /**
+     * Един кръг от даден endpoint (results, sprint, qualifying) — самото
+     * състезание заедно с класацията. null, ако кръгът още няма данни.
+     *
+     * Връща цялото състезание, а не само класацията, заради пистата в него:
+     * с нея се проверява, че нашият номер на кръга и този в Jolpica сочат едно
+     * и също състезание (виж ResultSyncService).
+     *
+     * @return array<string, mixed>|null
+     */
+    public function raceData(int $year, int $round, string $endpoint): ?array
+    {
+        $data = $this->get("{$year}/{$round}/{$endpoint}");
+
+        return $data['RaceTable']['Races'][0] ?? null;
+    }
+
+    /**
      * Резултати от едно състезание.
      *
      * @return array<int, array<string, mixed>>
      */
     public function results(int $year, int $round): array
     {
-        $data = $this->get("{$year}/{$round}/results");
-        $races = $data['RaceTable']['Races'] ?? [];
-
-        return $races[0]['Results'] ?? [];
+        return $this->raceData($year, $round, 'results')['Results'] ?? [];
     }
 
     /**
@@ -203,10 +217,7 @@ class JolpicaClient
      */
     public function sprintResults(int $year, int $round): array
     {
-        $data = $this->get("{$year}/{$round}/sprint");
-        $races = $data['RaceTable']['Races'] ?? [];
-
-        return $races[0]['SprintResults'] ?? [];
+        return $this->raceData($year, $round, 'sprint')['SprintResults'] ?? [];
     }
 
     /**
@@ -216,9 +227,6 @@ class JolpicaClient
      */
     public function qualifying(int $year, int $round): array
     {
-        $data = $this->get("{$year}/{$round}/qualifying");
-        $races = $data['RaceTable']['Races'] ?? [];
-
-        return $races[0]['QualifyingResults'] ?? [];
+        return $this->raceData($year, $round, 'qualifying')['QualifyingResults'] ?? [];
     }
 }

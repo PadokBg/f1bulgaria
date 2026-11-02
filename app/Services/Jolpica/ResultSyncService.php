@@ -12,25 +12,31 @@ use App\Models\Race;
 use App\Models\Result;
 use App\Models\Season;
 use App\Models\SessionResult;
+use App\Services\LiveTiming\SafetyCarDetector;
 use App\Services\Predictions\PredictionScoringService;
 use App\Support\Nationality;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Throwable;
 
 /**
  * Синхрон на резултатите от едно състезание (главно + спринт, ако е спринт
- * уикенд) + определяне на pole от квалификацията. След успешен синхрон задейства
- * точкуването на прогнозите. Идемпотентен.
+ * уикенд) + определяне на pole от квалификацията и safety car от OpenF1. След
+ * успешен синхрон задейства точкуването на прогнозите. Идемпотентен.
  */
 class ResultSyncService
 {
     public function __construct(
         private readonly JolpicaClient $client,
         private readonly PredictionScoringService $scoring,
+        private readonly SafetyCarDetector $safetyCar,
     ) {}
 
     /**
      * @return array{results:int, sprint:int, scored:int}
+     *
+     * @throws JolpicaException ако кръгът в Jolpica е друго състезание
      */
     public function sync(Race $race): array
     {
@@ -39,17 +45,29 @@ class ResultSyncService
         $round = $race->round;
 
         // Всички HTTP заявки преди транзакцията, за да не я държим по време на мрежа.
-        $mainRows = $this->client->results($year, $round);
-        $sprintRows = $race->has_sprint ? $this->client->sprintResults($year, $round) : [];
-        $qualifying = $this->client->qualifying($year, $round);
+        $main = $this->client->raceData($year, $round, 'results');
+        $sprint = $race->has_sprint ? $this->client->raceData($year, $round, 'sprint') : null;
+        $qualifying = $this->client->raceData($year, $round, 'qualifying');
 
-        $counts = DB::transaction(function () use ($race, $season, $mainRows, $sprintRows, $qualifying) {
+        foreach ([$main, $sprint, $qualifying] as $data) {
+            $this->assertSameRace($race, $data);
+        }
+
+        $mainRows = $main['Results'] ?? [];
+        $sprintRows = $sprint['SprintResults'] ?? [];
+        $qualifyingRows = $qualifying['QualifyingResults'] ?? [];
+
+        $counts = DB::transaction(function () use ($race, $season, $mainRows, $sprintRows, $qualifyingRows) {
             $main = $this->upsertResults($race, $season, $mainRows, ResultSessionType::Race);
             $sprint = $this->upsertResults($race, $season, $sprintRows, ResultSessionType::Sprint);
-            $this->syncQualifying($race, $season, $qualifying);
+            $this->syncQualifying($race, $season, $qualifyingRows);
 
             return ['results' => $main, 'sprint' => $sprint];
         });
+
+        if ($counts['results'] > 0) {
+            $this->resolveSafetyCar($race);
+        }
 
         $scored = 0;
 
@@ -58,6 +76,65 @@ class ResultSyncService
         }
 
         return [...$counts, 'scored' => $scored];
+    }
+
+    /**
+     * Проверява, че нашият кръг и този в Jolpica са едно и също състезание.
+     *
+     * Резултатите се теглят по НОМЕР на кръга. Когато календарът се размине
+     * (на 26.09.2026 Jolpica вмъкна кръг 16 в Малайзия и Сингапур стана 17-и),
+     * същият номер сочи друго състезание — и без тази проверка прогнозите за
+     * Сингапур щяха да се точкуват по резултатите от Малайзия.
+     *
+     * @param  array<string, mixed>|null  $data
+     *
+     * @throws JolpicaException
+     */
+    private function assertSameRace(Race $race, ?array $data): void
+    {
+        $circuitId = $data['Circuit']['circuitId'] ?? null;
+
+        if ($circuitId === null || $race->jolpica_id === null || $circuitId === $race->jolpica_id) {
+            return;
+        }
+
+        throw new JolpicaException(sprintf(
+            'Кръг %d в Jolpica е на „%s", а при нас е на „%s" — календарът е разминат. Пусни f1:sync-calendar.',
+            $race->round,
+            $circuitId,
+            $race->jolpica_id,
+        ));
+    }
+
+    /**
+     * Попълва safety car от OpenF1, ако още не е известен.
+     *
+     * Само за състезания с прогнози: полето служи единствено на точкуването,
+     * а историческият синхрон минава през стотици кръгове, за които заявките
+     * към OpenF1 биха били чист разход. Ръчно въведеното не се пипа. Ако
+     * OpenF1 още няма окончателни данни, следващото пускане опитва пак —
+     * последното състезание се пре-синхронизира на всеки 15 минути.
+     */
+    private function resolveSafetyCar(Race $race): void
+    {
+        if (! config('predictions.safety_car.autodetect')
+            || $race->had_safety_car !== null
+            || ! $race->predictions()->exists()) {
+            return;
+        }
+
+        try {
+            $detected = $this->safetyCar->detect($race);
+        } catch (Throwable $e) {
+            // Липсващ safety car не бива да спира точкуването на останалото.
+            Log::warning("Safety car за кръг {$race->round} не се определи: {$e->getMessage()}");
+
+            return;
+        }
+
+        if ($detected !== null) {
+            $race->update(['had_safety_car' => $detected]);
+        }
     }
 
     /**
