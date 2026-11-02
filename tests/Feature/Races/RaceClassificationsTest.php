@@ -86,6 +86,47 @@ it('подрежда сесиите в реда на уикенда', function (
             ->where('classifications.2.type', 'race'));
 });
 
+it('показва пилотите извън ростъра с българското име, ако го има, и без линк', function () {
+    $race = seedRaceWithQualifying();
+
+    SessionResult::query()->create([
+        'race_id' => $race->id,
+        'session_type' => SessionType::FP1->value,
+        'driver_id' => Driver::query()->value('id'),
+        'position' => 1,
+        'best_time' => '1:18.128',
+    ]);
+
+    // Новаци във FP1: няма ги в `drivers`, редът носи кой е карал.
+    foreach ([[91, 'Nikola Tsolov', 'RB F1 Team', 12], [98, 'Freddie Slater', 'Audi', 21]] as [$number, $name, $team, $position]) {
+        SessionResult::query()->create([
+            'race_id' => $race->id,
+            'session_type' => SessionType::FP1->value,
+            'driver_id' => null,
+            'driver_number' => $number,
+            'driver_name' => $name,
+            'team_name' => $team,
+            'position' => $position,
+            'best_time' => '1:19.604',
+            'source' => 'openf1',
+        ]);
+    }
+
+    $this->get("/races/{$race->id}")
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('classifications.0.type', 'fp1')
+            ->has('classifications.0.rows', 3)
+            ->where('classifications.0.rows.0.driver', 'Ландо Норис')
+            ->where('classifications.0.rows.1.driver', 'Никола Цолов')
+            ->where('classifications.0.rows.1.slug', null)
+            ->where('classifications.0.rows.1.team', 'RB F1 Team')
+            ->where('classifications.0.rows.1.time', '1:19.604')
+            // Без кирилско изписване в конфигурацията остава латиницата.
+            ->where('classifications.0.rows.2.driver', 'Freddie Slater')
+            ->where('classifications.0.rows.2.team', 'Audi'));
+});
+
 it('дава точки само за сесиите, които носят точки', function () {
     $race = seedRaceWithQualifying();
     $driver = Driver::query()->first();

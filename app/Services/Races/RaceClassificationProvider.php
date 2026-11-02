@@ -11,6 +11,7 @@ use App\Models\Result;
 use App\Models\SessionResult;
 use App\Support\DriverName;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Str;
 
 /**
  * Единственото място, което решава ОТКЪДЕ се показва класацията на сесия.
@@ -136,11 +137,11 @@ class RaceClassificationProvider
             ->values()
             ->map(fn ($row): array => [
                 'position' => $row->position,
-                'driver' => $row->driver
-                    ? DriverName::display($row->driver->slug, $row->driver->fullName())
-                    : null,
+                'driver' => $this->driverName($row),
+                // Без пилот от ростъра няма и страница, към която да водим.
                 'slug' => $row->driver?->slug,
-                'team' => $row->driver?->constructor?->name,
+                'team' => $row->driver?->constructor?->name
+                    ?? ($row instanceof SessionResult ? $row->team_name : null),
                 'time' => $row instanceof SessionResult ? $row->bestQualifyingTime() : null,
                 'gap' => $row instanceof SessionResult ? $row->gap : null,
                 'points' => $withPoints ? (float) $row->points : null,
@@ -148,5 +149,22 @@ class RaceClassificationProvider
                 'fastest_lap' => $row instanceof Result ? (bool) $row->fastest_lap : false,
             ])
             ->all();
+    }
+
+    /**
+     * Пилот извън ростъра (новак във FP1) няма ред в `drivers` — името му идва
+     * от самата класация. Кирилицата се търси по същия slug като за всички.
+     */
+    private function driverName(Result|SessionResult $row): ?string
+    {
+        if ($row->driver !== null) {
+            return DriverName::display($row->driver->slug, $row->driver->fullName());
+        }
+
+        if ($row instanceof SessionResult && filled($row->driver_name)) {
+            return DriverName::display(Str::slug($row->driver_name), $row->driver_name);
+        }
+
+        return null;
     }
 }

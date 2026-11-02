@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\LiveTiming;
 
 use App\Enums\SessionType;
+use App\Models\Constructor;
 use App\Models\Driver;
 use App\Models\Race;
 use App\Models\RaceSession;
@@ -12,7 +13,9 @@ use App\Models\Season;
 use App\Models\SessionResult;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Throwable;
 
 /**
@@ -75,6 +78,23 @@ class OpenF1SessionSync
         'race' => SessionType::Race,
     ];
 
+    /**
+     * Отборите, които OpenF1 и Jolpica пишат различно: име в OpenF1 с малки
+     * букви → `jolpica_id` на нашия конструктор. Еднаквите („Ferrari",
+     * „McLaren") се намират по име и не са тук.
+     *
+     * Нужно е за пилотите без отбор в ростъра — новаците във FP1. Иначе Цолов
+     * излиза в „Racing Bulls", а съотборникът му Линдблад в „RB F1 Team".
+     *
+     * @var array<string, string>
+     */
+    private const TEAM_ALIASES = [
+        'red bull racing' => 'red_bull',
+        'racing bulls' => 'rb',
+        'alpine' => 'alpine',
+        'cadillac' => 'cadillac',
+    ];
+
     public function __construct(
         private readonly OpenF1Client $client,
     ) {}
@@ -102,6 +122,13 @@ class OpenF1SessionSync
             return $stats;
         }
 
+        // Веднъж за целия обход — съпоставянето по номер, код и име е в паметта.
+        $roster = Driver::query()
+            ->where('season_id', $season->id)
+            ->with('constructor')
+            ->get();
+        $constructors = Constructor::query()->where('season_id', $season->id)->get();
+
         foreach ($all->groupBy('meeting_key') as $meetingSessions) {
             $race = $this->matchRace($season, $meetingSessions);
 
@@ -121,7 +148,7 @@ class OpenF1SessionSync
                 }
 
                 try {
-                    $count = $this->syncSession($season, $race, (int) $session['session_key'], $type);
+                    $count = $this->syncSession($roster, $constructors, $race, (int) $session['session_key'], $type);
 
                     if ($count > 0) {
                         $stats['sessions']++;
@@ -222,7 +249,21 @@ class OpenF1SessionSync
         return $end !== null && $end->addMinutes(35)->isPast();
     }
 
-    private function syncSession(Season $season, Race $race, int $sessionKey, SessionType $type): int
+    /**
+     * Класацията на една сесия, с всички карали в нея.
+     *
+     * Във FP1 отборите пускат новаци, които ги няма в ростъра — `drivers` е
+     * ростърът на лигата за прогнози и там не им е мястото. Те влизат с
+     * `driver_id` = null и с номер, име и отбор от OpenF1. Иначе класацията
+     * излиза с дупки: Цолов, 12-и във FP1 в Мексико 2026, просто липсваше.
+     *
+     * Записът е в транзакция: ако един ред гръмне, класацията остава каквато
+     * беше, вместо наполовина обновена до следващия синхрон.
+     *
+     * @param  Collection<int, Driver>  $roster
+     * @param  Collection<int, Constructor>  $constructors
+     */
+    private function syncSession(Collection $roster, Collection $constructors, Race $race, int $sessionKey, SessionType $type): int
     {
         $rows = $this->client->getSessionResult($sessionKey);
 
@@ -231,24 +272,51 @@ class OpenF1SessionSync
         }
 
         // Класацията носи само номера на болида — имената идват отделно.
-        $drivers = $this->client->getSessionDrivers($sessionKey)->keyBy('driver_number');
+        $entrants = $this->client->getSessionDrivers($sessionKey)->keyBy('driver_number');
+        $drivers = $this->matchRoster(
+            $roster,
+            $rows->map(fn (array $row): int => (int) $row['driver_number']),
+            $entrants,
+        );
+        $teammates = $this->teammateTeams($entrants, $drivers);
 
-        $count = 0;
+        return DB::transaction(function () use ($rows, $entrants, $drivers, $teammates, $constructors, $race, $type): int {
+            $existing = SessionResult::query()
+                ->where('race_id', $race->id)
+                ->where('session_type', $type->value)
+                ->get();
 
-        foreach ($rows as $row) {
-            $driver = $this->resolveDriver($season, (int) $row['driver_number'], $drivers);
+            $count = 0;
 
-            if ($driver === null) {
-                continue;
-            }
+            foreach ($rows as $row) {
+                $number = (int) $row['driver_number'];
+                $entrant = $entrants->get($number, []);
+                $driver = $drivers[$number] ?? null;
+                $name = $this->latinName($entrant) ?? $driver?->fullName();
 
-            SessionResult::query()->updateOrCreate(
-                [
-                    'race_id' => $race->id,
-                    'session_type' => $type->value,
-                    'driver_id' => $driver->id,
-                ],
-                [
+                // Пилот извън ростъра, за когото OpenF1 не е дал име: не знаем кой
+                // е. Следващият синхрон ще опита пак — пилотите се кешират 5 минути.
+                if ($name === null) {
+                    continue;
+                }
+
+                $result = $this->findRow($existing, $number, $driver);
+
+                if ($result === null) {
+                    $result = new SessionResult(['race_id' => $race->id, 'session_type' => $type->value]);
+                    $existing->push($result);
+                }
+
+                if ($driver !== null) {
+                    $this->releaseDriver($existing, $driver, $result);
+                }
+
+                $result->fill([
+                    'driver_id' => $driver?->id,
+                    'driver_number' => $number,
+                    'driver_name' => $name,
+                    'team_name' => $driver?->constructor?->name
+                        ?? $this->teamName($entrant, $teammates, $constructors),
                     'position' => isset($row['position']) && $row['position'] !== null
                         ? (int) $row['position']
                         : null,
@@ -259,41 +327,189 @@ class OpenF1SessionSync
                     'gap' => $this->gap($row['gap_to_leader'] ?? null),
                     'dnf' => (bool) ($row['dnf'] ?? false) || (bool) ($row['dns'] ?? false) || (bool) ($row['dsq'] ?? false),
                     'source' => 'openf1',
-                ],
-            );
+                ])->save();
 
-            $count++;
-        }
+                $count++;
+            }
 
-        return $count;
+            return $count;
+        });
     }
 
     /**
-     * @param  Collection<int, array<string, mixed>>  $drivers
+     * Кой от ростъра стои зад всеки номер в сесията.
+     *
+     * Първо по номер. После по трибуквения код, защото номерът се мени при смяна
+     * на отбор в рамките на сезона по-често от кода. Накрая по име: резервите,
+     * внесени от Jolpica, често нямат нито номер, нито код.
+     *
+     * Един пилот от ростъра стои зад най-много един номер. Иначе новак, чийто
+     * код съвпада с този на титуляр, би презаписал реда на титуляра.
+     *
+     * @param  Collection<int, Driver>  $roster
+     * @param  Collection<int, int>  $numbers
+     * @param  Collection<int, array<string, mixed>>  $entrants
+     * @return array<int, Driver>
      */
-    private function resolveDriver(Season $season, int $number, Collection $drivers): ?Driver
+    private function matchRoster(Collection $roster, Collection $numbers, Collection $entrants): array
     {
-        $byNumber = Driver::query()
-            ->where('season_id', $season->id)
-            ->where('permanent_number', $number)
-            ->first();
+        $byNumber = $roster->whereNotNull('permanent_number')->keyBy('permanent_number');
+        $byCode = $roster->whereNotNull('driver_code')->keyBy('driver_code');
+        $bySlug = $roster->keyBy('slug');
 
-        if ($byNumber !== null) {
-            return $byNumber;
+        $matched = [];
+
+        foreach ($numbers as $number) {
+            if ($byNumber->has($number)) {
+                $matched[$number] = $byNumber->get($number);
+            }
         }
 
-        // Резервен вариант по трибуквения код — номерът се мени при смяна на
-        // отбор в рамките на сезона по-често, отколкото кодът.
-        $acronym = $drivers->get($number)['name_acronym'] ?? null;
+        $taken = array_flip(array_map(fn (Driver $driver): int => $driver->id, $matched));
 
-        if (! is_string($acronym) || $acronym === '') {
+        foreach ($numbers as $number) {
+            if (isset($matched[$number])) {
+                continue;
+            }
+
+            $entrant = $entrants->get($number, []);
+            $name = $this->latinName($entrant);
+
+            $candidates = [
+                $byCode->get((string) ($entrant['name_acronym'] ?? '')),
+                $name !== null ? $bySlug->get(Str::slug($name)) : null,
+            ];
+
+            foreach ($candidates as $candidate) {
+                if ($candidate !== null && ! isset($taken[$candidate->id])) {
+                    $matched[$number] = $candidate;
+                    $taken[$candidate->id] = true;
+
+                    break;
+                }
+            }
+        }
+
+        return $matched;
+    }
+
+    /**
+     * Съществуващият ред на болида в тази класация.
+     *
+     * В OpenF1 самоличността е номерът на болида. Така и новак, който по-късно
+     * влезе в ростъра, запазва реда си, вместо да се появи втори. Редовете
+     * отпреди номерът да се пази нямат такъв — само тях познаваме по пилота.
+     *
+     * @param  Collection<int, SessionResult>  $existing
+     */
+    private function findRow(Collection $existing, int $number, ?Driver $driver): ?SessionResult
+    {
+        return $existing->first(fn (SessionResult $row): bool => $row->driver_number === $number)
+            ?? ($driver !== null
+                ? $existing->first(fn (SessionResult $row): bool => $row->driver_number === null && $row->driver_id === $driver->id)
+                : null);
+    }
+
+    /**
+     * Маха пилота от всеки друг ред на класацията, преди да го запише на този.
+     *
+     * Пилотът сменя болида, когато номерът му в ростъра се смени (Jolpica
+     * внася номера на резерва, щом той кара състезание) или когато се поправи
+     * сгрешен. Без това unique индексът по пилот гърми и сесията засяда на
+     * всеки синхрон. Старият ред остава със снимката си от OpenF1 и се
+     * попълва наново, щом стигнем до неговия номер. Ред без номер (отпреди
+     * миграцията) се изтрива — без пилот и без номер той не казва нищо.
+     *
+     * @param  Collection<int, SessionResult>  $existing
+     */
+    private function releaseDriver(Collection $existing, Driver $driver, SessionResult $keep): void
+    {
+        foreach ($existing as $index => $row) {
+            if ($row === $keep || $row->driver_id !== $driver->id) {
+                continue;
+            }
+
+            if ($row->driver_number === null) {
+                $row->delete();
+                $existing->forget($index);
+
+                continue;
+            }
+
+            $row->update(['driver_id' => null]);
+        }
+    }
+
+    /**
+     * Отборите по съотборниците: име в OpenF1 → името на отбора в ростъра.
+     *
+     * Последна възможност за отбор, който OpenF1 нарича иначе и който не е в
+     * TEAM_ALIASES (например след ребрандиране). Не е първа, защото съотборникът
+     * може вече да е в друг отбор: при смяна по средата на сезона ростърът
+     * помни новия му отбор, не този, за който е карал в сесията.
+     *
+     * @param  Collection<int, array<string, mixed>>  $entrants
+     * @param  array<int, Driver>  $drivers
+     * @return array<string, string>
+     */
+    private function teammateTeams(Collection $entrants, array $drivers): array
+    {
+        $names = [];
+
+        foreach ($drivers as $number => $driver) {
+            $theirs = $entrants->get($number)['team_name'] ?? null;
+            $ours = $driver->constructor?->name;
+
+            if (is_string($theirs) && $theirs !== '' && $ours !== null) {
+                $names[$theirs] ??= $ours;
+            }
+        }
+
+        return $names;
+    }
+
+    /**
+     * Отборът на пилот без отбор в ростъра, както го пише сайтът.
+     *
+     * Първо същото име, после TEAM_ALIASES, после съотборник от сесията. Ако
+     * нищо не съвпадне, остава името от OpenF1 — по-добре от празно.
+     *
+     * @param  array<string, mixed>  $entrant
+     * @param  array<string, string>  $teammates
+     * @param  Collection<int, Constructor>  $constructors
+     */
+    private function teamName(array $entrant, array $teammates, Collection $constructors): ?string
+    {
+        $theirs = trim((string) ($entrant['team_name'] ?? ''));
+
+        if ($theirs === '') {
             return null;
         }
 
-        return Driver::query()
-            ->where('season_id', $season->id)
-            ->where('driver_code', $acronym)
-            ->first();
+        $key = mb_strtolower($theirs);
+        $alias = self::TEAM_ALIASES[$key] ?? null;
+
+        $ours = $constructors->first(fn (Constructor $constructor): bool => mb_strtolower($constructor->name) === $key)
+            ?? ($alias !== null ? $constructors->firstWhere('jolpica_id', $alias) : null);
+
+        return $ours?->name ?? $teammates[$theirs] ?? $theirs;
+    }
+
+    /**
+     * Латинското име, както го пише сайтът — „Nikola Tsolov".
+     *
+     * @param  array<string, mixed>  $entrant
+     */
+    private function latinName(array $entrant): ?string
+    {
+        $name = trim(((string) ($entrant['first_name'] ?? '')).' '.((string) ($entrant['last_name'] ?? '')));
+
+        // `full_name` е с фамилия в главни букви: „Nikola TSOLOV".
+        if ($name === '' && filled($entrant['full_name'] ?? null)) {
+            $name = Str::title(mb_strtolower(trim((string) $entrant['full_name'])));
+        }
+
+        return $name !== '' ? $name : null;
     }
 
     /**

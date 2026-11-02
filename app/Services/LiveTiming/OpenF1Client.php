@@ -121,7 +121,10 @@ class OpenF1Client
     /**
      * Пилотите в сесията. Кеш 5 мин (рядко се мени по време на сесия).
      *
-     * @return Collection<int, array{driver_number:int, name_acronym:?string, full_name:?string, team_name:?string, team_colour:?string}>
+     * `full_name` идва с фамилия в главни букви („Nikola TSOLOV"); за показване
+     * са `first_name` и `last_name`.
+     *
+     * @return Collection<int, array{driver_number:int, name_acronym:?string, full_name:?string, first_name:?string, last_name:?string, team_name:?string, team_colour:?string}>
      */
     public function getSessionDrivers(int $sessionKey): Collection
     {
@@ -132,6 +135,8 @@ class OpenF1Client
                     'driver_number' => (int) $d['driver_number'],
                     'name_acronym' => $d['name_acronym'] ?? null,
                     'full_name' => $d['full_name'] ?? null,
+                    'first_name' => $d['first_name'] ?? null,
+                    'last_name' => $d['last_name'] ?? null,
                     'team_name' => $d['team_name'] ?? null,
                     'team_colour' => isset($d['team_colour']) ? '#'.ltrim((string) $d['team_colour'], '#') : null,
                 ])

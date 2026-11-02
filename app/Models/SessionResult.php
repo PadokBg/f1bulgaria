@@ -11,6 +11,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 /**
  * Ред от класация на сесия без шампионатни точки.
  *
+ * `driver_id` е null за пилот извън ростъра (новак във FP1) — тогава кой е
+ * карал казват `driver_number`, `driver_name` и `team_name` от OpenF1.
+ *
  * @property SessionType $session_type
  */
 class SessionResult extends Model
@@ -19,6 +22,9 @@ class SessionResult extends Model
         'race_id',
         'session_type',
         'driver_id',
+        'driver_number',
+        'driver_name',
+        'team_name',
         'position',
         'dnf',
         'best_time',
@@ -33,6 +39,8 @@ class SessionResult extends Model
     {
         return [
             'session_type' => SessionType::class,
+            'driver_id' => 'integer',
+            'driver_number' => 'integer',
             'position' => 'integer',
             'dnf' => 'boolean',
         ];

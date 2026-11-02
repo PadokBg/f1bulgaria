@@ -9,6 +9,7 @@ use App\Models\ChannelPost;
 use App\Models\Constructor;
 use App\Models\Driver;
 use App\Models\Race;
+use App\Models\RaceSession;
 use App\Models\Result;
 use App\Models\Season;
 use App\Models\SessionResult;
@@ -186,6 +187,48 @@ it('отбелязва най-бързата обиколка и отпадна�
         ->and($body)->toContain('25 т.')
         ->and($body)->toContain('🟣')
         ->and($body)->toContain('Отпаднали: Люис Хамилтън');
+});
+
+it('показва в поста за тренировка и новака извън ростъра', function () {
+    $race = f1Race();
+    $lindblad = f1Driver($race, 'Arvid', 'Lindblad', 'arvid-lindblad', 'RB F1 Team');
+
+    // Тренировките нямат резервно време в `races` — тръгват по разписанието.
+    RaceSession::query()->create([
+        'race_id' => $race->id,
+        'type' => SessionType::FP1->value,
+        'scheduled_at_utc' => now()->subHours(10),
+    ]);
+
+    SessionResult::query()->create([
+        'race_id' => $race->id,
+        'session_type' => SessionType::FP1->value,
+        'driver_id' => $lindblad->id,
+        'driver_number' => 41,
+        'position' => 10,
+        'best_time' => '1:19.478',
+        'source' => 'openf1',
+    ]);
+
+    SessionResult::query()->create([
+        'race_id' => $race->id,
+        'session_type' => SessionType::FP1->value,
+        'driver_id' => null,
+        'driver_number' => 91,
+        'driver_name' => 'Nikola Tsolov',
+        'team_name' => 'RB F1 Team',
+        'position' => 12,
+        'best_time' => '1:19.604',
+        'gap' => '+1.476',
+        'source' => 'openf1',
+    ]);
+
+    app(F1ChannelEnqueuer::class)->enqueuePending();
+
+    $body = ChannelPost::query()->where('kind', ChannelPostKind::F1Fp1->value)->sole()->body;
+
+    expect($body)->toContain('<b>Никола Цолов</b> · RB F1 Team · 1:19.604 · +1.476')
+        ->and($body)->toContain('<b>Арвид Линдблад</b> · RB F1 Team');
 });
 
 it('не наваксва състезания извън прозореца', function () {
