@@ -59,9 +59,12 @@ class RaceResultMail extends Mailable
     }
 
     /**
-     * Разбивката като четими редове — същият ред и същите имена като на сайта.
+     * Разбивката като четими редове — същият ред, същите имена и същите три
+     * вида попадение като на сайта (resources/js/predictions/breakdownRows.js).
+     * Със „✓" за всяко ненулево частичното „Победител +5" излизаше под
+     * „Какво позна" като познат победител.
      *
-     * @return array<int, array{label: string, points: int}>
+     * @return array<int, array{label: string, points: int, mark: string, note: ?string}>
      */
     private function rows(): array
     {
@@ -82,9 +85,48 @@ class RaceResultMail extends Mailable
                 continue;
             }
 
-            $rows[] = ['label' => $label, 'points' => (int) $this->breakdown[$key]];
+            $points = (int) $this->breakdown[$key];
+            $hit = $this->hit($key, $points);
+
+            $rows[] = [
+                'label' => $label,
+                'points' => $points,
+                'mark' => match ($hit) {
+                    'exact' => '✓',
+                    'partial' => '≈',
+                    'miss' => '✗',
+                },
+                'note' => match (true) {
+                    $hit !== 'partial' => null,
+                    $key === 'dnf' => 'с разлика от един',
+                    default => 'на подиума, но на друго място',
+                },
+            ];
         }
 
         return $rows;
+    }
+
+    /**
+     * Точно, частично (пилот на подиума на друго място, DNF с разлика 1) или
+     * мимо. breakdown_json пази само точките, затова видът се извежда от
+     * стойността спрямо схемата — както BadgeService::isPerfectPodium.
+     *
+     * @return 'exact'|'partial'|'miss'
+     */
+    private function hit(string $key, int $points): string
+    {
+        if ($points <= 0) {
+            return 'miss';
+        }
+
+        /** @var array{exact: array<string, int>, dnf_exact: int} $scoring */
+        $scoring = config('predictions.scoring');
+
+        return match (true) {
+            array_key_exists($key, $scoring['exact']) => $points === $scoring['exact'][$key] ? 'exact' : 'partial',
+            $key === 'dnf' => $points === $scoring['dnf_exact'] ? 'exact' : 'partial',
+            default => 'exact',
+        };
     }
 }

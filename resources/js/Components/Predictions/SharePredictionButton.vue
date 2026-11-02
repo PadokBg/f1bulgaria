@@ -1,4 +1,6 @@
 <script setup>
+import { breakdownRows } from '@/predictions/breakdownRows';
+import { usePage } from '@inertiajs/vue3';
 import { computed, ref } from 'vue';
 
 const props = defineProps({
@@ -14,26 +16,11 @@ const props = defineProps({
 const busy = ref(false);
 const failed = ref(false);
 
-// Същият ред като в PredictionBreakdown, за да е разпознаваем на картичката.
-const LABELS = [
-    ['p1', 'Победител'],
-    ['p2', 'Второ място'],
-    ['p3', 'Трето място'],
-    ['pole', 'Pole позиция'],
-    ['fastest_lap', 'Най-бърза обиколка'],
-    ['dnf', 'Брой отпаднали'],
-    ['safety_car', 'Safety car'],
-];
-
-const rows = computed(() => {
-    if (!props.breakdown) {
-        return [];
-    }
-
-    return LABELS
-        .filter(([key]) => props.breakdown[key] !== undefined)
-        .map(([key, label]) => ({ label, hit: (Number(props.breakdown[key]) || 0) > 0 }));
-});
+// Същите редове и същите три вида попадение като в PredictionBreakdown.
+// Картичката излиза от сайта — не бива да твърди „✓ Победител" за пилот,
+// завършил втори.
+const rows = computed(() => breakdownRows(props.breakdown, usePage().props.predictionScoring)
+    .map(({ label, status, shortNote }) => ({ label, status, note: shortNote })));
 
 const share = async () => {
     if (busy.value) {

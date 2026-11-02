@@ -24,7 +24,7 @@ const BRAND = '#e10600';
  * @param {number} data.points       Спечелените точки
  * @param {number|null} data.rank    Позиция в кръга
  * @param {number|null} data.total   Колко души са прогнозирали
- * @param {Array<{label: string, hit: boolean}>} data.rows  Какво е познал
+ * @param {Array<{label: string, status: 'exact'|'partial'|'miss', note: string|null}>} data.rows  Разбивката (виж breakdownRows.js)
  * @returns {Promise<Blob>}
  */
 export async function buildPredictionCard(data) {
@@ -94,31 +94,55 @@ export async function buildPredictionCard(data) {
     return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
 }
 
+// Същите три вида попадение като в разбивката на сайта. Частичното е в
+// кехлибарено с бележка — със зеленото „✓" картичката твърдеше „Победител"
+// и за пилот, завършил втори.
+const ROW_STYLES = {
+    exact: { fill: 'rgba(52,211,153,0.12)', mark: '✓', accent: '#34d399', text: '#e4e4e7' },
+    partial: { fill: 'rgba(251,191,36,0.12)', mark: '≈', accent: '#fbbf24', text: '#e4e4e7' },
+    miss: { fill: 'rgba(255,255,255,0.03)', mark: '✗', accent: '#52525b', text: '#71717a' },
+};
+
 /**
- * Дясната колона: какво е познал и какво не.
+ * Дясната колона: какво е познал, какво почти и какво не.
  *
  * @param {CanvasRenderingContext2D} ctx
- * @param {Array<{label: string, hit: boolean}>} rows
+ * @param {Array<{label: string, status: 'exact'|'partial'|'miss', note: string|null}>} rows
  */
 function drawRows(ctx, rows) {
     const left = 680;
     const top = 150;
     const lineHeight = 56;
+    const textWidth = 390;
 
     rows.slice(0, 7).forEach((row, i) => {
         const y = top + i * lineHeight;
+        const style = ROW_STYLES[row.status] ?? ROW_STYLES.miss;
 
-        ctx.fillStyle = row.hit ? 'rgba(52,211,153,0.12)' : 'rgba(255,255,255,0.03)';
+        ctx.fillStyle = style.fill;
         roundRect(ctx, left, y, 456, 44, 10);
         ctx.fill();
 
-        ctx.fillStyle = row.hit ? '#34d399' : '#52525b';
+        ctx.fillStyle = style.accent;
         ctx.font = `700 24px ${TEXT_FAMILY}`;
-        ctx.fillText(row.hit ? '✓' : '✗', left + 16, y + 10);
+        ctx.fillText(style.mark, left + 16, y + 10);
 
-        ctx.fillStyle = row.hit ? '#e4e4e7' : '#71717a';
+        ctx.fillStyle = style.text;
         ctx.font = `600 24px ${TEXT_FAMILY}`;
-        ctx.fillText(truncate(ctx, row.label, 390), left + 48, y + 10);
+        const label = truncate(ctx, row.label, textWidth);
+        ctx.fillText(label, left + 48, y + 10);
+
+        if (row.note) {
+            const labelWidth = ctx.measureText(label).width;
+
+            ctx.fillStyle = style.accent;
+            ctx.font = `600 20px ${TEXT_FAMILY}`;
+            ctx.fillText(
+                truncate(ctx, `· ${row.note}`, textWidth - labelWidth - 10),
+                left + 48 + labelWidth + 10,
+                y + 13,
+            );
+        }
     });
 }
 

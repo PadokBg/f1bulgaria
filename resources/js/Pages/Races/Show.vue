@@ -1,6 +1,7 @@
 <script setup>
 import LivePredictionsPanel from '@/Components/Predictions/LivePredictionsPanel.vue';
 import PredictionBreakdown from '@/Components/Predictions/PredictionBreakdown.vue';
+import ScoringRules from '@/Components/Predictions/ScoringRules.vue';
 import SharePredictionButton from '@/Components/Predictions/SharePredictionButton.vue';
 import PredictionForm from '@/Components/PredictionForm.vue';
 import OtherPredictions from '@/Components/Races/OtherPredictions.vue';
@@ -229,6 +230,10 @@ const showsTime = computed(() => active.value?.rows.some((r) => r.time));
                     :prediction="userPrediction"
                     :locked="locked"
                 />
+
+                <!-- Правилата стоят до формата и до разбивката: точно там човек
+                     се чуди колко носи всеки избор. -->
+                <ScoringRules class="mt-4" />
             </aside>
         </div>
 

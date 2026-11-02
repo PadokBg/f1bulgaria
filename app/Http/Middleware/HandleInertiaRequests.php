@@ -42,6 +42,9 @@ class HandleInertiaRequests extends Middleware
                 'success' => fn () => $request->session()->get('success'),
             ],
             'teamBrands' => fn () => config('team-brands'),
+            // Точковата схема за „Как се точкува" и за вида попадение в
+            // разбивката — от конфига, за да не се разминава с точкуването.
+            'predictionScoring' => fn () => config('predictions.scoring'),
             // mcp_ops е сървърен флаг (скрит админ endpoint) — няма какво да
             // прави в навигацията, а издава, че такъв рут съществува.
             'features' => fn () => Arr::except(config('features'), ['mcp_ops']),

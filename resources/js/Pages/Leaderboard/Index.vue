@@ -1,4 +1,5 @@
 <script setup>
+import ScoringRules from '@/Components/Predictions/ScoringRules.vue';
 import EmptyState from '@/Components/UI/EmptyState.vue';
 import TableShell from '@/Components/UI/TableShell.vue';
 import PublicLayout from '@/Layouts/PublicLayout.vue';
@@ -43,9 +44,9 @@ const podium = (pos) => ({
                 Включи се в играта
             </Link>
         </div>
-        <p class="mb-6 text-sm text-zinc-500">
-            Точкуване: точен подиум, pole, най-бърза обиколка, брой DNF и safety car.
-        </p>
+        <!-- Едното изречение „точен подиум, pole…" внушаваше, че само точното
+             място носи точки, а частичните 5 т. не се виждаха никъде. -->
+        <ScoringRules anchor="kak-se-tochkuva" class="mb-6" />
 
         <EmptyState v-if="leaderboard.length === 0">
             Все още няма точкувани прогнози.

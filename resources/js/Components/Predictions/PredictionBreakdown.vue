@@ -1,4 +1,6 @@
 <script setup>
+import { breakdownRows } from '@/predictions/breakdownRows';
+import { usePage } from '@inertiajs/vue3';
 import { computed } from 'vue';
 
 const props = defineProps({
@@ -7,27 +9,17 @@ const props = defineProps({
     total: { type: Number, default: 0 },
 });
 
-// Редът следва формата за прогноза, за да е разпознаваем.
-const LABELS = [
-    ['p1', 'Победител'],
-    ['p2', 'Второ място'],
-    ['p3', 'Трето място'],
-    ['pole', 'Pole позиция'],
-    ['fastest_lap', 'Най-бърза обиколка'],
-    ['dnf', 'Брой отпаднали'],
-    ['safety_car', 'Safety car'],
-];
+// Редът следва формата за прогноза, за да е разпознаваем. Нескорирана
+// прогноза идва без breakdown — тогава редове няма и компонентът мълчи.
+const rows = computed(() => breakdownRows(props.breakdown, usePage().props.predictionScoring));
 
-// Нескорирана прогноза идва без breakdown — компонентът не бива да гърми.
-const rows = computed(() => {
-    if (!props.breakdown) {
-        return [];
-    }
-
-    return LABELS
-        .filter(([key]) => props.breakdown[key] !== undefined)
-        .map(([key, label]) => ({ key, label, points: Number(props.breakdown[key]) || 0 }));
-});
+// Частичното попадение има собствен цвят и обяснение: със зеленото „✓" на
+// точното „Победител +5" се четеше като познат победител.
+const STYLES = {
+    exact: { row: 'bg-emerald-950/20', mark: '✓', accent: 'text-emerald-400', label: 'text-zinc-200' },
+    partial: { row: 'bg-amber-950/20', mark: '≈', accent: 'text-amber-400', label: 'text-zinc-200' },
+    miss: { row: 'bg-zinc-900/40', mark: '✗', accent: 'text-zinc-600', label: 'text-zinc-500' },
+};
 </script>
 
 <template>
@@ -37,19 +29,22 @@ const rows = computed(() => {
                 v-for="row in rows"
                 :key="row.key"
                 class="flex items-center justify-between gap-3 px-3 py-2 text-sm"
-                :class="row.points > 0 ? 'bg-emerald-950/20' : 'bg-zinc-900/40'"
+                :class="STYLES[row.status].row"
             >
                 <span class="flex min-w-0 items-center gap-2">
                     <span
                         class="shrink-0 text-xs"
-                        :class="row.points > 0 ? 'text-emerald-400' : 'text-zinc-600'"
+                        :class="STYLES[row.status].accent"
                         aria-hidden="true"
-                    >{{ row.points > 0 ? '✓' : '✗' }}</span>
-                    <span class="truncate" :class="row.points > 0 ? 'text-zinc-200' : 'text-zinc-500'">{{ row.label }}</span>
+                    >{{ STYLES[row.status].mark }}</span>
+                    <span class="min-w-0">
+                        <span class="block truncate" :class="STYLES[row.status].label">{{ row.label }}</span>
+                        <span v-if="row.note" class="block text-xs text-amber-400/80">{{ row.note }}</span>
+                    </span>
                 </span>
                 <span
                     class="shrink-0 font-bold tabular-nums"
-                    :class="row.points > 0 ? 'text-emerald-400' : 'text-zinc-600'"
+                    :class="STYLES[row.status].accent"
                 >{{ row.points > 0 ? '+' + row.points : '0' }}</span>
             </li>
         </ul>
