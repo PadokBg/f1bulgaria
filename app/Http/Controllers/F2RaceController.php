@@ -32,14 +32,20 @@ class F2RaceController extends Controller
         abort_if($sessionModel === null, 404);
 
         // Кои сесии съществуват за този кръг (за toggle-а), в реда на уикенда.
-        $available = F2RaceSession::query()
+        $withResults = F2RaceSession::query()
             ->where('f2_race_id', $raceModel->id)
             ->whereHas('results')
             ->get(['session_type'])
-            ->sortBy(fn (F2RaceSession $s) => $s->session_type->order())
+            ->sortBy(fn (F2RaceSession $s) => $s->session_type->order());
+
+        $hasSecondFeatureRace = $withResults->contains(
+            fn (F2RaceSession $s): bool => $s->session_type === F2SessionType::SecondFeatureRace,
+        );
+
+        $available = $withResults
             ->map(fn (F2RaceSession $s) => [
                 'segment' => $s->session_type->urlSegment(),
-                'label' => $s->session_type->label(),
+                'label' => $s->session_type->labelInRound($hasSecondFeatureRace),
             ])
             ->values();
 
@@ -52,7 +58,7 @@ class F2RaceController extends Controller
                 'circuit_jolpica_id' => $raceModel->circuit_jolpica_id,
             ],
             'sessionType' => $session,
-            'sessionLabel' => $type->label(),
+            'sessionLabel' => $type->labelInRound($hasSecondFeatureRace),
             'isRace' => $type->isRace(),
             'sessions' => $available,
             'pole' => $sessionModel->poleDriver ? $this->driverRef($sessionModel->poleDriver) : null,

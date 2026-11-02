@@ -112,12 +112,12 @@ class F2SessionFormatter
 
         // Пол позицията има смисъл само за главното състезание — решетката на
         // спринта е обърнатата десетка, не резултат от квалификация.
-        if ($type === F2SessionType::FeatureRace && $session->poleDriver !== null) {
+        if (in_array($type, [F2SessionType::FeatureRace, F2SessionType::SecondFeatureRace], strict: true) && $session->poleDriver !== null) {
             $lines[] = '';
             $lines[] = '🅿️ От пол позиция: <b>'.TelegramText::escape($this->name($session->poleDriver)).'</b>';
         }
 
-        if ($type === F2SessionType::FeatureRace) {
+        if (in_array($type, [F2SessionType::FeatureRace, F2SessionType::SecondFeatureRace], strict: true)) {
             $standings = $this->standings($session);
 
             if ($standings !== null) {

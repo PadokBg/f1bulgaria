@@ -134,6 +134,7 @@ return [
     | Тези имена излизат във всеки пост в Telegram канала след F2 сесия.
     */
     'alexander-dunne' => 'Александър Дън',
+    'hiyu-yamakoshi' => 'Хию Ямакоши',
     'kush-maini' => 'Куш Майни',
     'rafael-camara' => 'Рафаел Камара',
     'gabriele-mini' => 'Габриеле Мини',

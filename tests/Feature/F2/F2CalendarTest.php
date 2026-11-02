@@ -43,6 +43,21 @@ it('/f2/calendar показва текущия сезон с кръгове', fu
             ->where('rounds.0.feature.podium.0.driver', 'Никола Цолов'));
 });
 
+it('/f2/calendar показва второто главно само в кръга, който го има', function () {
+    $season = seedF2Round();
+    $baku = F2Race::create(['f2_season_id' => $season->id, 'location_name' => 'Baku', 'round' => 12, 'slug' => '2026-baku']);
+    $second = F2RaceSession::create(['f2_race_id' => $baku->id, 'session_type' => F2SessionType::SecondFeatureRace, 'date' => '2026-09-26']);
+    F2Result::create(['f2_race_session_id' => $second->id, 'f2_driver_id' => F2Driver::query()->value('id'), 'position' => 2, 'points' => 19]);
+
+    $this->get('/f2/calendar')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->has('rounds', 2)
+            ->where('rounds.0.feature_2', null)
+            ->where('rounds.1.feature_2.date', '26.09.2026')
+            ->where('rounds.1.feature_2.podium.0.position', 2));
+});
+
 it('/f2/calendar/{year} показва конкретен сезон', function () {
     seedF2Round();
     F2Season::create(['year' => 2025, 'is_current' => false]);

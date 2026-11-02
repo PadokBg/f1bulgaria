@@ -31,6 +31,13 @@ class F2ApiSync
     /** @var array{rounds:int, sessions:int, results:int, skipped_drivers:int, errors:array<int, string>} */
     private array $stats = ['rounds' => 0, 'sessions' => 0, 'results' => 0, 'skipped_drivers' => 0, 'errors' => []];
 
+    /**
+     * Кодовете на сесии, които не разпознахме при това пускане, като ключове.
+     *
+     * @var array<string, true>
+     */
+    private array $unknownSessions = [];
+
     public function __construct(
         private readonly F2ApiClient $client,
     ) {}
@@ -44,6 +51,7 @@ class F2ApiSync
     public function syncSeason(int $year, ?callable $onRound = null): array
     {
         $this->stats = ['rounds' => 0, 'sessions' => 0, 'results' => 0, 'skipped_drivers' => 0, 'errors' => []];
+        $this->unknownSessions = [];
 
         $meetings = $this->client->meetings($year);
 
@@ -80,9 +88,30 @@ class F2ApiSync
             }
         }
 
+        $this->reportUnknownSessions($year);
+
         $this->syncStandings($season);
 
         return ['season' => $year, ...$this->stats];
+    }
+
+    /**
+     * Шумно, а не тихо: от 28.07.2026 API-то смени кодовете на сесиите и три
+     * месеца всяко пускане отчиташе „0 сесии" без нито едно предупреждение,
+     * докато класирането (отделен endpoint) продължаваше да се обновява.
+     * Едно предупреждение на пускане, с различните кодове.
+     */
+    private function reportUnknownSessions(int $year): void
+    {
+        if ($this->unknownSessions === []) {
+            return;
+        }
+
+        $message = 'непознати сесии в календара, пропуснати: '
+            .implode(', ', array_map(fn (string $code): string => "„{$code}\"", array_keys($this->unknownSessions)));
+
+        $this->stats['errors'][] = $message;
+        Log::warning("F2 API, сезон {$year}: {$message}");
     }
 
     /**
@@ -133,46 +162,59 @@ class F2ApiSync
         $featureStart = null;
 
         foreach ($apiSessions as $apiSession) {
-            if (F2SessionType::fromApiCode((string) ($apiSession['session'] ?? '')) === F2SessionType::FeatureRace) {
-                $featureStart = $this->toUtc($apiSession['startTime'] ?? null, (string) ($apiSession['gmtOffset'] ?? $offset));
+            if (F2SessionType::fromApiSession((array) $apiSession) === F2SessionType::FeatureRace) {
+                [$featureStart] = $this->sessionTimes((array) $apiSession, $offset);
             }
+        }
+
+        $attributes = [
+            'meeting_key' => $meetingKey,
+            // Връзката към F1 пистата дава българското име на Гран при-то
+            // (config/race-names-bg.php) и кръстосаните връзки към
+            // страниците на пистите. Без нея постът казва „Hungary".
+            'circuit_jolpica_id' => config('f2-circuit-map')[$location] ?? null,
+            'location_name' => $location,
+            'country_name' => (string) ($meeting['meetingCountryName'] ?? '') ?: null,
+            'slug' => Str::slug("{$season->year}-{$location}"),
+        ];
+
+        // Без разпознато главно състезание датата остава, каквато е: при
+        // смяната на кодовете (28.07.2026) всеки кръг беше занулен.
+        if ($featureStart !== null) {
+            $attributes['race_datetime_utc'] = $featureStart;
         }
 
         $race = F2Race::query()->updateOrCreate(
             ['f2_season_id' => $season->id, 'round' => $round],
-            [
-                'meeting_key' => $meetingKey,
-                // Връзката към F1 пистата дава българското име на Гран при-то
-                // (config/race-names-bg.php) и кръстосаните връзки към
-                // страниците на пистите. Без нея постът казва „Hungary".
-                'circuit_jolpica_id' => config('f2-circuit-map')[$location] ?? null,
-                'location_name' => $location,
-                'country_name' => (string) ($meeting['meetingCountryName'] ?? '') ?: null,
-                'race_datetime_utc' => $featureStart,
-                'slug' => Str::slug("{$season->year}-{$location}"),
-            ],
+            $attributes,
         );
 
         $synced = 0;
+        $seen = [];
 
         foreach ($apiSessions as $apiSession) {
-            $type = F2SessionType::fromApiCode((string) ($apiSession['session'] ?? ''));
+            $type = F2SessionType::fromApiSession((array) $apiSession);
 
             if ($type === null) {
+                $this->unknownSessions[(string) ($apiSession['session'] ?? '?')] = true;
+
                 continue;
             }
 
-            $startsAt = $this->toUtc($apiSession['startTime'] ?? null, (string) ($apiSession['gmtOffset'] ?? $offset));
-            $endsAt = $this->toUtc($apiSession['endTime'] ?? null, (string) ($apiSession['gmtOffset'] ?? $offset));
+            $seen[] = $type;
+
+            [$startsAt, $endsAt] = $this->sessionTimes((array) $apiSession, $offset);
             $state = (string) ($apiSession['state'] ?? '');
 
             $sessionModel = F2RaceSession::query()->updateOrCreate(
                 ['f2_race_id' => $race->id, 'session_type' => $type->value],
                 [
-                    'date' => $startsAt?->toDateString(),
+                    // Денят, както го показва сайтът — в софийско време. По UTC
+                    // тренировката в Мелбърн (10:00 местно, 06.03) беше 05.03.
+                    'date' => $startsAt?->copy()->setTimezone('Europe/Sofia')->toDateString(),
                     'scheduled_at_utc' => $startsAt,
                     'ends_at_utc' => $endsAt,
-                    'time_tbc' => $this->isPlaceholderTime($apiSession['startTime'] ?? null),
+                    'time_tbc' => $this->isTimeTbc((array) $apiSession),
                     'state' => $state ?: null,
                 ],
             );
@@ -185,9 +227,36 @@ class F2ApiSync
             }
         }
 
+        $this->pruneVanishedSessions($race, $seen);
         $this->propagatePole($race);
 
         return $synced;
+    }
+
+    /**
+     * Маха сесиите, които API-то вече не изрежда за кръга и нямат резултати.
+     *
+     * Баку 2026 е записан през юли с една квалификация, а днес API-то дава
+     * две (Qualifying 1 и 2). Старият ред остава празен и
+     * /f2/races/2026-baku/qualifying показва празна класация.
+     *
+     * Класация, която вече е показана и публикувана, не изчезва заради промяна
+     * в календара — затова само без резултати. И само когато поне една сесия
+     * е разпозната: празен или непознат календар не бива да трие разписанието.
+     *
+     * @param  array<int, F2SessionType>  $seen
+     */
+    private function pruneVanishedSessions(F2Race $race, array $seen): void
+    {
+        if ($seen === []) {
+            return;
+        }
+
+        F2RaceSession::query()
+            ->where('f2_race_id', $race->id)
+            ->whereNotIn('session_type', array_map(fn (F2SessionType $type): string => $type->value, $seen))
+            ->whereDoesntHave('results')
+            ->delete();
     }
 
     /**
@@ -208,16 +277,54 @@ class F2ApiSync
             ->whereNotNull('pole_position_driver_id')
             ->first();
 
-        if ($qualifying === null) {
+        if ($qualifying !== null) {
+            F2RaceSession::query()
+                ->where('f2_race_id', $race->id)
+                ->where('session_type', F2SessionType::FeatureRace->value)
+                ->update([
+                    'pole_position_driver_id' => $qualifying->pole_position_driver_id,
+                    'pole_position_time' => $qualifying->pole_position_time,
+                ]);
+        }
+
+        $this->propagateSecondFeaturePole($race);
+    }
+
+    /**
+     * Pole за второто главно: първият от втората квалификация.
+     *
+     * В Баку 2026 Qualifying 2 (у нас групата Б) е отделна квалификация за
+     * целия старт и нарежда само второто главно — pole там взе Стеншорне, а не
+     * Дън от първата. В Монако групата Б е половин старт, но там второ главно
+     * няма, така че правилото не я засяга.
+     */
+    private function propagateSecondFeaturePole(F2Race $race): void
+    {
+        $secondFeature = F2RaceSession::query()
+            ->where('f2_race_id', $race->id)
+            ->where('session_type', F2SessionType::SecondFeatureRace->value)
+            ->first();
+
+        if ($secondFeature === null) {
+            return;
+        }
+
+        $fastest = F2Result::query()
+            ->where('position', 1)
+            ->whereHas('session', fn ($query) => $query
+                ->where('f2_race_id', $race->id)
+                ->where('session_type', F2SessionType::QualifyingGroupB->value))
+            ->first();
+
+        if ($fastest === null) {
             return;
         }
 
         F2RaceSession::query()
-            ->where('f2_race_id', $race->id)
-            ->where('session_type', F2SessionType::FeatureRace->value)
+            ->whereKey($secondFeature->id)
             ->update([
-                'pole_position_driver_id' => $qualifying->pole_position_driver_id,
-                'pole_position_time' => $qualifying->pole_position_time,
+                'pole_position_driver_id' => $fastest->f2_driver_id,
+                'pole_position_time' => $fastest->time_or_gap,
             ]);
     }
 
@@ -247,6 +354,7 @@ class F2ApiSync
             F2SessionType::QualifyingGroupB => $this->client->qualifying($season->year, $meetingKey, 2),
             F2SessionType::SprintRace => $this->client->race($season->year, $meetingKey, 1),
             F2SessionType::FeatureRace => $this->client->race($season->year, $meetingKey, 2),
+            F2SessionType::SecondFeatureRace => $this->client->race($season->year, $meetingKey, 3),
         };
 
         if ($rows === []) {
@@ -602,14 +710,54 @@ class F2ApiSync
     /**
      * Часът още не е обявен.
      *
-     * Бъдещите кръгове идват с `startTime` точно в 00:00 местно време —
-     * запълнител, не разписание. Проверено срещу API-то: и четирите сесии на
-     * Монца (кръг 10) са в 00:00, тоест дори подредбата в рамките на деня е
-     * произволна. F2 никога не кара в полунощ, така че проверката е безопасна.
+     * Новият формат (от 28.07.2026) го казва изрично със `sessionStatus:
+     * "TBC"`, но с правдоподобни кръгли часове — Лусаил 2026 идва с 12:00,
+     * 16:00, 13:00, 12:00. Без проверката по статуса сайтът би показал
+     * запълнителя като потвърден час.
+     *
+     * Старият формат пращаше `startTime` точно в 00:00 местно време. Проверено
+     * срещу API-то: и четирите сесии на Монца (кръг 10) бяха в 00:00. F2 никога
+     * не кара в полунощ, така че проверката е безопасна.
+     *
+     * @param  array<string, mixed>  $apiSession
      */
-    private function isPlaceholderTime(mixed $startTime): bool
+    private function isTimeTbc(array $apiSession): bool
     {
+        if (strtoupper((string) ($apiSession['sessionStatus'] ?? '')) === 'TBC') {
+            return true;
+        }
+
+        $startTime = $apiSession['startTime'] ?? null;
+
         return is_string($startTime) && str_ends_with($startTime, 'T00:00:00');
+    }
+
+    /**
+     * Началото и краят на сесията в UTC.
+     *
+     * Запълнителят „00:00 местно" се мести на обяд. Иначе на изток от София
+     * пада в предишния ден: Яс Марина (+04:00) в 00:00 на 06.12 е 22:00 на
+     * 05.12 софийско, и календарът, броячът на началната страница и редът
+     * „Следва" в канала показваха състезанието с ден по-рано. Часът така или
+     * иначе не се показва (time_tbc).
+     *
+     * @param  array<string, mixed>  $apiSession
+     * @return array{0: ?Carbon, 1: ?Carbon}
+     */
+    private function sessionTimes(array $apiSession, string $meetingOffset): array
+    {
+        $offset = (string) ($apiSession['gmtOffset'] ?? $meetingOffset);
+        $startsAt = $this->toUtc($apiSession['startTime'] ?? null, $offset);
+        $endsAt = $this->toUtc($apiSession['endTime'] ?? null, $offset);
+
+        $startTime = $apiSession['startTime'] ?? null;
+
+        if (is_string($startTime) && str_ends_with($startTime, 'T00:00:00')) {
+            $startsAt = $startsAt?->addHours(12);
+            $endsAt = $endsAt?->addHours(12);
+        }
+
+        return [$startsAt, $endsAt];
     }
 
     private function toUtc(mixed $value, string $offset): ?Carbon

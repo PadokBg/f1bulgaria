@@ -270,6 +270,17 @@ it('съставя четим пост с медал, отбор и време',
         ->and($body)->toContain('1:30.720');
 });
 
+it('пише pole и под второто главно състезание (Баку 2026)', function () {
+    $session = makeF2Session(F2SessionType::SecondFeatureRace, 'Final');
+    F2RaceSession::query()->whereKey($session->id)->update(['pole_position_driver_id' => F2Driver::query()->value('id')]);
+
+    app(F2ChannelEnqueuer::class)->enqueuePending();
+    $body = ChannelPost::query()->first()->body;
+
+    expect($body)->toContain('Формула 2 · Второ главно състезание')
+        ->and($body)->toContain('От пол позиция: <b>Никола Цолов</b>');
+});
+
 it('дописва българския пилот, ако е извън първите десет', function () {
     $season = F2Season::query()->create(['year' => 2026, 'is_current' => true]);
     $race = F2Race::query()->create([

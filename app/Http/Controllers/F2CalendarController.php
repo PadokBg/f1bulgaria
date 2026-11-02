@@ -46,6 +46,8 @@ class F2CalendarController extends Controller
                 'slug' => $race->slug,
                 'sprint' => $this->sessionSummary($race, F2SessionType::SprintRace),
                 'feature' => $this->sessionSummary($race, F2SessionType::FeatureRace),
+                // Само Баку 2026; другаде е null и картата не се показва.
+                'feature_2' => $this->sessionSummary($race, F2SessionType::SecondFeatureRace),
             ]);
     }
 

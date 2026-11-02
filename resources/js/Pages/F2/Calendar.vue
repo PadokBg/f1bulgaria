@@ -14,6 +14,14 @@ const props = defineProps({
 });
 
 const goToSeason = (e) => router.visit(route('f2.calendar.year', e.target.value));
+
+// Ключът е и отрязъкът в URL-а на класацията. Спринтът и главното са винаги
+// (празните показват „Предстои“), второто главно — само където го има.
+const raceCards = (round) => [
+    { key: 'sprint', label: 'Спринт', session: round.sprint },
+    { key: 'feature', label: 'Главно', session: round.feature },
+    ...(round.feature_2 ? [{ key: 'feature-2', label: 'Второ главно', session: round.feature_2 }] : []),
+];
 </script>
 
 <template>
@@ -46,25 +54,25 @@ const goToSeason = (e) => router.visit(route('f2.calendar.year', e.target.value)
                 </div>
 
                 <div class="grid gap-3 sm:grid-cols-2">
-                    <div v-for="(s, key) in { sprint: r.sprint, feature: r.feature }" :key="key" class="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+                    <div v-for="card in raceCards(r)" :key="card.key" class="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
                         <div class="mb-2 flex items-center justify-between">
-                            <span class="text-xs font-bold uppercase tracking-wide" :class="key === 'feature' ? 'text-red-400' : 'text-sky-400'">
-                                {{ key === 'feature' ? 'Главно' : 'Спринт' }}
+                            <span class="text-xs font-bold uppercase tracking-wide" :class="card.key.startsWith('feature') ? 'text-red-400' : 'text-sky-400'">
+                                {{ card.label }}
                             </span>
                             <Link
-                                v-if="s"
-                                :href="route('f2.race', [r.slug, key])"
+                                v-if="card.session"
+                                :href="route('f2.race', [r.slug, card.key])"
                                 class="text-xs text-zinc-500 transition hover:text-zinc-300"
                             >
                                 Резултати →
                             </Link>
                         </div>
-                        <div v-if="s" class="space-y-1">
-                            <div v-for="p in s.podium" :key="p.position" class="flex items-center gap-2 text-sm">
+                        <div v-if="card.session" class="space-y-1">
+                            <div v-for="p in card.session.podium" :key="p.position" class="flex items-center gap-2 text-sm">
                                 <span class="w-4 font-bold tabular-nums" :class="podiumClass(p.position) || 'text-zinc-500'">{{ p.position }}</span>
                                 <span class="text-zinc-200"><FlagIcon :code="p.flag" class="mr-1" />{{ p.driver }}</span>
                             </div>
-                            <div v-if="s.date" class="mt-1 text-xs text-zinc-500">{{ s.date }}</div>
+                            <div v-if="card.session.date" class="mt-1 text-xs text-zinc-500">{{ card.session.date }}</div>
                         </div>
                         <div v-else class="text-sm text-zinc-500">Предстои</div>
                     </div>

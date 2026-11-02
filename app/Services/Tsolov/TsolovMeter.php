@@ -111,7 +111,7 @@ class TsolovMeter
     private function nextSession(F2Season $season): ?array
     {
         $session = F2RaceSession::query()
-            ->whereIn('session_type', [F2SessionType::SprintRace, F2SessionType::FeatureRace])
+            ->whereIn('session_type', F2SessionType::races())
             ->whereHas('race', fn ($query) => $query->where('f2_season_id', $season->id))
             ->where('scheduled_at_utc', '>', now())
             ->orderBy('scheduled_at_utc')

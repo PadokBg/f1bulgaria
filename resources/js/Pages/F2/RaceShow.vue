@@ -38,7 +38,7 @@ const rowClass = (p) => ({ 1: 'bg-amber-500/10', 2: 'bg-zinc-400/10', 3: 'bg-ora
                 <Link v-for="s in sessions" :key="s.segment" :href="route('f2.race', [race.slug, s.segment])"
                     class="rounded-lg px-3 py-2 font-medium transition"
                     :class="sessionType === s.segment
-                        ? (s.segment === 'feature' ? 'bg-red-600 text-white' : 'bg-sky-600 text-white')
+                        ? (s.segment.startsWith('feature') ? 'bg-red-600 text-white' : 'bg-sky-600 text-white')
                         : 'bg-zinc-900 text-zinc-400 hover:text-white'">{{ s.label }}</Link>
                 <Link v-if="race.circuit_jolpica_id && hasRoute('circuits.show')" :href="route('circuits.show', race.circuit_jolpica_id)"
                     class="rounded-lg bg-zinc-900 px-3 py-2 font-medium text-zinc-400 transition hover:text-white">Пистата →</Link>

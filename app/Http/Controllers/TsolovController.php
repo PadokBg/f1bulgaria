@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
+use App\Enums\F2SessionType;
 use App\Models\F2Driver;
 use App\Models\F2Result;
 use App\Models\F2Season;
@@ -111,7 +112,14 @@ class TsolovController extends Controller
         }
 
         $second = $top->firstWhere('position', 2);
-        $rounds = $season->races()->whereHas('sessions.results')->count();
+        // Кръгът влиза, щом има резултат от СЪСТЕЗАНИЕ. С резултат от каквото
+        // и да е бележката казваше „след 13 от 14" още в петък след
+        // тренировката, докато класирането беше след 12.
+        $rounds = $season->races()
+            ->whereHas('sessions', fn ($query) => $query
+                ->whereIn('session_type', F2SessionType::races())
+                ->whereHas('results'))
+            ->count();
 
         return [
             'season_stats' => [
@@ -155,7 +163,7 @@ class TsolovController extends Controller
         return F2Result::query()
             ->where('f2_driver_id', $driver->id)
             ->where('position', 1)
-            ->whereHas('session', fn ($query) => $query->whereIn('session_type', ['sprint_race', 'feature_race']))
+            ->whereHas('session', fn ($query) => $query->whereIn('session_type', F2SessionType::races()))
             ->count();
     }
 }

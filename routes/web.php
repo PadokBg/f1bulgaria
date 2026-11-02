@@ -112,7 +112,7 @@ Route::middleware('feature:f2')->group(function () {
     // sprint|feature са наследени отрязъци — не ги преименувай, външни линкове
     // и вече публикувани постове в канала сочат към тях.
     Route::get('/f2/races/{race}/{session}', [F2RaceController::class, 'show'])
-        ->where('session', 'practice|qualifying|qualifying-a|qualifying-b|sprint|feature')
+        ->where('session', 'practice|qualifying|qualifying-a|qualifying-b|sprint|feature|feature-2')
         ->name('f2.race');
     Route::get('/f2/seasons/{year}', [F2Controller::class, 'season'])->where('year', '[0-9]{4}')->name('f2.season');
 });
